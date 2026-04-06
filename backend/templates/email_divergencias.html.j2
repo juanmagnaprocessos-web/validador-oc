@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; color: #1a2332;">
+  <p>Bom dia, <strong>{{ comprador }}</strong>,</p>
+  <p>Seguem OC's sinalizadas. Favor retornar com as devidas correções.</p>
+
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; margin-top: 16px;">
+    <thead style="background: #1a2332; color: white;">
+      <tr>
+        <th>OC</th>
+        <th>Placa</th>
+        <th>Fornecedor</th>
+        <th>Motivo</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in ocs %}
+      <tr>
+        <td>{{ r.oc.id_pedido }}</td>
+        <td>{{ r.oc.identificador }}</td>
+        <td>{{ r.oc.fornecedor.for_nome if r.oc.fornecedor else "" }}</td>
+        <td>{{ r.motivo_resumido }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p style="margin-top: 20px; font-size: 12px; color: #5a6c7f;">
+    Enviado automaticamente pelo validador-oc em {{ gerado_em }}.
+  </p>
+</body>
+</html>

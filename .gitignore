@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.local
+
+# Segredos e configuração sensível
+.env
+.env.*
+!.env.example
+backend/config/pipefy_ids.json
+
+# Banco de dados local
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Relatórios gerados
+backend/relatorios/*.html
+backend/relatorios/*.xlsx
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
