@@ -11,9 +11,19 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+
+def _norm_label(s: str) -> str:
+    """Lowercase + remove acentos para comparação robusta de labels."""
+    if not s:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
 import httpx
 
@@ -145,6 +155,7 @@ class PipefyClient:
             node {
               id
               title
+              created_at
               current_phase { id name }
               fields {
                 name
@@ -195,6 +206,7 @@ class PipefyClient:
       card(id: $id) {
         id
         title
+        created_at
         current_phase { id name }
         fields {
           name
@@ -225,6 +237,8 @@ class PipefyClient:
         anexo_cilia_url: str | None = None
         valor_card: Decimal | None = None
         descricao_pecas: str | None = None
+        forma_pagamento: str | None = None
+        origem_peca: str | None = None
 
         for f in node.get("fields") or []:
             field_def = f.get("field") or {}
@@ -238,6 +252,14 @@ class PipefyClient:
                 codigo_oc = str(val)
             if fid and fid == campo_anexo and val:
                 anexo_url = _primeira_url(val) or _primeira_url(f.get("array_value"))
+
+            # Forma de pagamento e Origem da peça — campos do start form
+            # do card (radio_vertical / select). São a fonte canônica para
+            # decidir a fase de destino e detectar Mercado Livre.
+            if fid == "forma_de_pagamento" and val:
+                forma_pagamento = str(val).strip()
+            if fid == "origem_da_pe_a" and val:
+                origem_peca = str(val).strip()
 
             # Campo "Valor" (currency) — fonte primária para comparação R3
             if ftype == "currency" and val and label.lower() == "valor":
@@ -253,13 +275,9 @@ class PipefyClient:
                 descricao_pecas = str(val)
 
             # Anexo "Orçamento Cília" — usado como substituto enquanto API
-            # do Cilia não está disponível
-            if (
-                ftype == "attachment"
-                and val
-                and "cília" in label.lower()
-                or (ftype == "attachment" and val and "cilia" in label.lower())
-            ):
+            # do Cilia não está disponível. Normaliza acentos para casar
+            # "Cília", "cilia", "CÍLIA" sem depender de cedilha/case.
+            if ftype == "attachment" and val and "cilia" in _norm_label(label):
                 anexo_cilia_url = _primeira_url(val) or _primeira_url(f.get("array_value"))
 
         # Fallback: primeira URL de attachments se o campo não foi identificado
@@ -271,6 +289,16 @@ class PipefyClient:
                     break
 
         phase = node.get("current_phase") or {}
+        created_at_raw = node.get("created_at")
+        created_at: datetime | None = None
+        if created_at_raw:
+            try:
+                created_at = datetime.fromisoformat(
+                    str(created_at_raw).replace("Z", "+00:00")
+                )
+            except ValueError:
+                logger.debug("created_at inválido em card %s: %s", node.get("id"), created_at_raw)
+
         return CardPipefy(
             id=str(node["id"]),
             title=str(node.get("title") or ""),
@@ -282,7 +310,178 @@ class PipefyClient:
             anexo_cilia_url=anexo_cilia_url,
             valor_card=valor_card,
             descricao_pecas=descricao_pecas,
+            created_at=created_at,
+            forma_pagamento=forma_pagamento,
+            origem_peca=origem_peca,
         )
+
+    # ---------- pipe principal: cards de cancelamento ----------
+
+    async def listar_cards_cancelamento_pipe_principal(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Varre as duas fases de cancelamento do pipe principal e
+        retorna uma lista de dicts no formato esperado por
+        `db.atualizar_cache_cancelamentos`:
+
+            {
+              "placa_normalizada": "MWE7258",
+              "card_id": "1234567890",
+              "tipo": "informacoes_incorretas" | "cancelado",
+              "fase_atual": "Informações Incorretas" | "Cancelados",
+            }
+
+        Reusa `listar_cards_fase()` (que já parseia os cards) para as
+        chaves `informacoes_incorretas` e `cancelados` do pipefy_ids.
+        A placa vem do `card.title` (já normalizado, sem hífen) com
+        fallback defensivo de remover hífen/espaço/upper.
+        """
+        out: list[dict[str, Any]] = []
+        for tipo, chave in (
+            ("informacoes_incorretas", "informacoes_incorretas"),
+            ("cancelado", "cancelados"),
+        ):
+            try:
+                cards = await self.listar_cards_fase(chave)
+            except Exception as e:
+                logger.warning(
+                    "Falha ao listar fase %s do pipe principal: %s", chave, e
+                )
+                continue
+            for c in cards:
+                placa_norm = (
+                    (c.title or "").replace("-", "").replace(" ", "").upper()
+                )
+                if not placa_norm:
+                    continue
+                out.append(
+                    {
+                        "placa_normalizada": placa_norm,
+                        "card_id": str(c.id),
+                        "tipo": tipo,
+                        "fase_atual": c.phase_name,
+                        "descricao_pecas": c.descricao_pecas,
+                        "codigo_oc": c.codigo_oc,
+                    }
+                )
+        logger.info(
+            "Cancelamentos no pipe principal: %d cards "
+            "(informacoes_incorretas + cancelados)",
+            len(out),
+        )
+        return out
+
+    # ---------- pipe de Devolução de Peças ----------
+
+    LIST_PIPE_CARDS_QUERY = """
+    query($pipeId: ID!, $first: Int!, $after: String) {
+      cards(pipe_id: $pipeId, first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            id
+            title
+            done
+            current_phase { id name }
+            fields {
+              field { id label type }
+              value
+            }
+          }
+        }
+      }
+    }
+    """
+
+    async def listar_devolucoes_abertas(
+        self,
+        pipe_id: int | None = None,
+        *,
+        max_cards: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Lista todos os cards `done=false` do pipe de Devolução de Peças.
+
+        Retorna uma lista de dicts no formato esperado por
+        `db.atualizar_cache_devolucoes`:
+
+            {
+              "placa_normalizada": "MWE7258",   # sem hífen
+              "card_id": "1089889305",
+              "n_oc": "1597340" | None,
+              "peca_descricao": "BARRA DIR..." | None,
+              "fase_atual": "Peça em Estoque" | None,
+            }
+
+        Não levanta exceção em caso de campos faltantes — ignora cards
+        sem placa preenchida (logando warning) para não quebrar a R2.
+        """
+        pid = pipe_id or settings.pipefy_pipe_devolucao_id
+        out: list[dict[str, Any]] = []
+        after: str | None = None
+        while True:
+            data = await self._gql(
+                self.LIST_PIPE_CARDS_QUERY,
+                {"pipeId": str(pid), "first": 50, "after": after},
+            )
+            conn_data = data.get("cards") or {}
+            for edge in conn_data.get("edges") or []:
+                node = edge.get("node") or {}
+                if node.get("done"):
+                    # `done=true` significa fase terminal (Concluído,
+                    # Não Localizada, Cancelado). Não nos interessa.
+                    continue
+                placa_raw: str | None = None
+                n_oc: str | None = None
+                peca_desc: str | None = None
+                cod_peca: str | None = None
+                motivo: str | None = None
+                for f in node.get("fields") or []:
+                    fdef = f.get("field") or {}
+                    fid = fdef.get("id")
+                    val = f.get("value")
+                    if not val:
+                        continue
+                    if fid == "placa":
+                        placa_raw = str(val).strip()
+                    elif fid == "n_oc":
+                        n_oc = str(val).strip()
+                    elif fid == "cite_as_pe_as_a_serem_devolvidas":
+                        peca_desc = str(val).strip()
+                    elif fid == "cod":
+                        cod_peca = str(val).strip()
+                    elif fid == "motivo_devolu_o":
+                        motivo = str(val).strip()
+                if not placa_raw:
+                    logger.debug(
+                        "Devolução %s sem placa preenchida — ignorada",
+                        node.get("id"),
+                    )
+                    continue
+                # Normaliza placa: remove hífen + uppercase + sem espaços.
+                # No pipe Devolução já vem sem hífen (segundo nosso teste),
+                # mas normalizamos defensivamente para casar com o Club.
+                placa_norm = (
+                    placa_raw.replace("-", "").replace(" ", "").upper()
+                )
+                phase = node.get("current_phase") or {}
+                out.append(
+                    {
+                        "placa_normalizada": placa_norm,
+                        "card_id": str(node.get("id")),
+                        "n_oc": n_oc,
+                        "peca_descricao": peca_desc,
+                        "fase_atual": phase.get("name"),
+                    }
+                )
+            page = conn_data.get("pageInfo") or {}
+            if not page.get("hasNextPage") or len(out) >= max_cards:
+                break
+            after = page.get("endCursor")
+
+        logger.info(
+            "Pipefy Devolução: %d cards em aberto (pipe %s)", len(out), pid
+        )
+        return out
 
     # ---------- download de anexo + extração de valor ----------
 

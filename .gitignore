@@ -23,11 +23,15 @@ dist/
 .env.*
 !.env.example
 backend/config/pipefy_ids.json
+backend/config/pipefy_ids_devolucao.json
 
 # Banco de dados local
 backend/data/*.db
 backend/data/*.db-wal
 backend/data/*.db-shm
+
+# Sessão persistente do Cilia (cookie sensível)
+backend/data/cilia_session.json
 
 # Relatórios gerados
 backend/relatorios/*.html

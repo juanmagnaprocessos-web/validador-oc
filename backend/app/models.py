@@ -145,12 +145,24 @@ class CardPipefy(BaseModel):
     phase_id: str | None = None
     phase_name: str | None = None
     campos: dict[str, Any] = Field(default_factory=dict)
-    codigo_oc: str | None = None        # campo "Código da OC"
+    codigo_oc: str | None = None        # campo "Código da OC" — match com OC.id_pedido do Club
     anexo_oc_url: str | None = None     # campo "Ordem de compra" — PDF
     anexo_cilia_url: str | None = None  # campo "Orçamento Cília" — PDF (descoberto)
-    valor_card: Decimal | None = None   # campo "Valor" (currency) estruturado
+    valor_card: Decimal | None = None   # campo "Valor" (currency) estruturado — REFERÊNCIA PRINCIPAL
     valor_extraido_pdf: Decimal | None = None
     descricao_pecas: str | None = None  # long_text "Descrição das Peças"
+    created_at: datetime | None = None  # criado_em do card no Pipefy (para filtro D-1)
+    # Campos do start form usados para decidir a fase de destino — são a
+    # FONTE CANÔNICA da forma de pagamento e da origem da peça (não os
+    # campos análogos do Club, que trazem prazo de pagamento, não forma).
+    forma_pagamento: str | None = None  # "PIX" | "Cartão de Crédito" | "Faturado" | "Boleto"
+    origem_peca: str | None = None      # "Mercado Livre / Site" | "Estoque" | "Auto Peça"
+
+    @property
+    def eh_mercado_livre(self) -> bool:
+        """True se o card é Mercado Livre — preferimos o campo 'Origem da peça'
+        do start form, que é a fonte oficial preenchida pelo comprador."""
+        return (self.origem_peca or "").strip().lower().startswith("mercado livre")
 
 
 # ======================================================================
@@ -163,6 +175,103 @@ class Divergencia(BaseModel):
     descricao: str                          # explicação detalhada
     severidade: Severidade = Severidade.ERRO
     dados: dict[str, Any] = Field(default_factory=dict)
+
+
+# ======================================================================
+# Auth — perfis e usuários
+# ======================================================================
+
+class Perfil(BaseModel):
+    id: int
+    nome: str
+    descricao: str | None = None
+    permissoes: list[str] = Field(default_factory=list)
+    criado_em: str
+
+
+class PerfilCreate(BaseModel):
+    nome: str = Field(..., min_length=2, max_length=50)
+    descricao: str | None = None
+    permissoes: list[str] = Field(default_factory=list)
+
+
+class PerfilUpdate(BaseModel):
+    nome: str | None = Field(None, min_length=2, max_length=50)
+    descricao: str | None = None
+    permissoes: list[str] | None = None
+
+
+class Usuario(BaseModel):
+    id: int
+    username: str
+    nome: str
+    email: str | None = None
+    perfil_id: int
+    perfil_nome: str | None = None
+    ativo: bool
+    must_change_password: bool
+    criado_em: str
+    ultimo_login: str | None = None
+
+
+class UsuarioCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    nome: str = Field(..., min_length=2, max_length=120)
+    email: str | None = None
+    perfil_id: int
+    senha_temporaria: str = Field(..., min_length=8, max_length=128)
+
+
+class UsuarioUpdate(BaseModel):
+    nome: str | None = Field(None, min_length=2, max_length=120)
+    email: str | None = None
+    perfil_id: int | None = None
+    ativo: bool | None = None
+
+
+class TrocarSenhaRequest(BaseModel):
+    senha_atual: str
+    nova_senha: str = Field(..., min_length=8, max_length=128)
+
+
+class ResetSenhaResponse(BaseModel):
+    nova_senha_temporaria: str
+
+
+class OcOrfa(BaseModel):
+    """OC do Club que NÃO tem card correspondente no Pipefy.
+    Listada separadamente no relatório para o analista identificar
+    cards faltantes ou atrasados."""
+    id_pedido: str
+    id_cotacao: str | None = None
+    identificador: str | None = None        # placa
+    valor: Decimal | None = None
+    fornecedor: str | None = None
+    comprador: str | None = None
+    forma_pagamento: str | None = None      # prazo do Club ("07 dias", "A Vista"...)
+    data_pedido: date | None = None
+    # Verificação de duplicidade interna de peças (R2 parte 1) aplicada
+    # também às OCs órfãs — "Sim" / "Não" / "—" (sem cotação para checar).
+    peca_duplicada: str = "—"
+    qtd_produtos: int | None = None
+    # Divergências da R2 cross-time (parte 2) — incluem dados estruturados
+    # com link para a OC anterior e link para o card de devolução, se houver.
+    divergencias: list[Divergencia] = Field(default_factory=list)
+    # Resumo simples de "houve reincidência cross-time?", para a coluna do relatório.
+    reincidencia: str = "—"   # "—" | "sim_devolucao" | "sim_mesmo_forn" | "sim_outro_forn"
+    # Cancelamento detectado no pipe principal (fases Inf. Incorretas / Cancelados)
+    cancelamento: str = "—"   # "—" | "info_incorretas" | "cancelado" | "ambos"
+    cancelamento_card_id: str | None = None
+    # Lista de produtos efetivamente comprados nesta OC (vem do
+    # `get_order_details(id_pedido).items` do Club).
+    produtos: list[ProdutoCotacao] = Field(default_factory=list)
+    # Chaves de produto (mesma chave da R2) que são reincidentes — pré
+    # computado pelo orchestrator para o template marcar visualmente.
+    chaves_reincidentes: list[str] = Field(default_factory=list)  # link clicável para o card
+    # Todas as duplicidades históricas da placa (90d), incluindo peças que
+    # NÃO estão nesta OC. Cada item é um dict com chave_produto, descricao,
+    # total_ocorrencias, ids_pedido, datas_oc, fornecedores, status_devolucao.
+    duplicidades_placa: list[dict] = Field(default_factory=list)
 
 
 class ContextoValidacao(BaseModel):
@@ -182,8 +291,9 @@ class ResultadoValidacao(BaseModel):
     status: StatusValidacao
     divergencias: list[Divergencia] = Field(default_factory=list)
     fase_destino: FasePipefy | None = None
+    valor_card: Decimal | None = None     # campo "Valor" do card Pipefy — REFERÊNCIA PRINCIPAL
     valor_club: Decimal | None = None
-    valor_pdf: Decimal | None = None
+    valor_pdf: Decimal | None = None      # extraído do anexo PDF — auditoria
     valor_cilia: Decimal | None = None
     qtd_cotacoes: int | None = None
     qtd_produtos: int | None = None
@@ -192,6 +302,31 @@ class ResultadoValidacao(BaseModel):
     card_pipefy_id: str | None = None
     fase_pipefy_atual: str | None = None   # nome da fase em que o card estava no Pipefy
     validado_em: datetime = Field(default_factory=datetime.now)
+    # Resumo da R2 cross-time (parte 2) — populado pelo orchestrator a
+    # partir das `divergencias` da R2 cross-time + cache de devoluções
+    reincidencia: str = "—"        # "—" | "sim_devolucao" | "sim_mesmo_forn" | "sim_outro_forn"
+    # Cancelamento detectado no pipe principal (fases Inf. Incorretas / Cancelados)
+    cancelamento: str = "—"        # "—" | "info_incorretas" | "cancelado" | "ambos"
+    cancelamento_card_id: str | None = None
+    # Subset das `divergencias` que vieram da R2 cross-time, para o template
+    # renderizar o detalhe expansível com TODAS as peças reincidentes.
+    divergencias_cross: list[Divergencia] = Field(default_factory=list)
+    # Lista de produtos efetivamente comprados nesta OC (vem do
+    # `get_order_details(id_pedido).items` do Club). Usado pelo template
+    # para renderizar o expansor "Listar peças".
+    produtos: list[ProdutoCotacao] = Field(default_factory=list)
+    # Conjunto de chaves de produto (mesma chave da R2) que são
+    # reincidentes nesta validação. Pré-computado pelo orchestrator
+    # para evitar loop O(n*m) no Jinja2.
+    chaves_reincidentes: list[str] = Field(default_factory=list)
+    # Forma de pagamento "canônica" — vem do CARD do Pipefy quando
+    # disponível, senão fallback para `oc.forma` (Club). É a fonte
+    # oficial usada pelo `_decidir_fase()`.
+    forma_pagamento_canonica: str | None = None
+    # Todas as duplicidades históricas da placa (90d), incluindo peças que
+    # NÃO estão nesta OC. Cada item é um dict com chave_produto, descricao,
+    # total_ocorrencias, ids_pedido, datas_oc, fornecedores, status_devolucao.
+    duplicidades_placa: list[dict] = Field(default_factory=list)
 
     @property
     def aprovada(self) -> bool:
@@ -199,11 +334,10 @@ class ResultadoValidacao(BaseModel):
 
     @property
     def requer_acao_pipefy(self) -> bool:
-        """Falso para ML (aguarda analista) e já processada (não tocar)."""
-        return self.status not in (
-            StatusValidacao.AGUARDANDO_ML,
-            StatusValidacao.JA_PROCESSADA,
-        )
+        """Falso apenas para JA_PROCESSADA (card já fora da fase Validação).
+        ML AGORA é movido para Compra Mercado Livre automaticamente — antes
+        ficava parado aguardando analista."""
+        return self.status != StatusValidacao.JA_PROCESSADA
 
     @property
     def motivo_resumido(self) -> str:

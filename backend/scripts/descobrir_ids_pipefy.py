@@ -31,6 +31,7 @@ Uso:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import unicodedata
@@ -105,6 +106,15 @@ def _buscar_campo(fields: list[dict], *nomes: str) -> dict | None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Descobre IDs de fases e campos do Pipefy")
+    parser.add_argument("--pipe-id", type=int, default=None,
+                        help="ID do pipe (default: PIPE_ID do .env)")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Caminho do JSON de saída (default: config/pipefy_ids.json)")
+    args = parser.parse_args()
+
+    pipe_id = args.pipe_id or settings.pipe_id
+
     if not settings.pipefy_token or "SUBSTITUIR" in settings.pipefy_token:
         console.print(
             "[red]PIPEFY_TOKEN não configurado. Edite .env primeiro.[/red]"
@@ -112,12 +122,12 @@ def main() -> int:
         return 1
 
     console.print(
-        f"[cyan]Consultando pipe {settings.pipe_id} em {settings.pipefy_api_url}...[/cyan]"
+        f"[cyan]Consultando pipe {pipe_id} em {settings.pipefy_api_url}...[/cyan]"
     )
 
     resp = httpx.post(
         settings.pipefy_api_url,
-        json={"query": QUERY, "variables": {"pipeId": str(settings.pipe_id)}},
+        json={"query": QUERY, "variables": {"pipeId": str(pipe_id)}},
         headers={
             "Authorization": f"Bearer {settings.pipefy_token}",
             "Content-Type": "application/json",
@@ -238,6 +248,14 @@ def main() -> int:
     out = {
         "pipe_id": int(pipe["id"]),
         "pipe_name": pipe["name"],
+        "start_form_fields": {
+            f["label"]: {
+                "id": f["id"],
+                "type": f.get("type"),
+                "internal_id": f.get("internal_id"),
+            }
+            for f in (pipe.get("start_form_fields") or [])
+        },
         "phases": {
             p["name"]: {
                 "id": p["id"],
@@ -256,7 +274,10 @@ def main() -> int:
         "campos_validacao": mapping_campos,
     }
 
-    out_path = settings.pipefy_ids_full_path
+    from pathlib import Path
+    out_path = Path(args.output) if args.output else settings.pipefy_ids_full_path
+    if not out_path.is_absolute():
+        out_path = settings.pipefy_ids_full_path.parent.parent / out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     console.print(f"\n[green]Salvo em:[/green] {out_path}")

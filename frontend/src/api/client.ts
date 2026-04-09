@@ -1,7 +1,10 @@
 // Cliente HTTP simples para o backend validador-oc.
 // Em dev, o proxy do Vite redireciona /api/* → http://localhost:8000/*.
+// Autenticação: HTTP Basic. As credenciais são guardadas no
+// sessionStorage e injetadas em todas as chamadas pelo `apiFetch`.
 
 const BASE = "/api";
+const STORAGE_KEY = "validador.auth";
 
 export type StatusValidacao =
   | "aprovada"
@@ -19,6 +22,7 @@ export interface ValidarResponse {
   bloqueadas: number;
   aguardando_ml: number;
   ja_processadas: number;
+  ocs_orfas?: number;
   dry_run: boolean;
   relatorio_html: string;
   relatorio_xlsx: string;
@@ -34,6 +38,7 @@ export interface OcResultado {
   fornecedor: string | null;
   comprador: string | null;
   forma_pagamento: string | null;
+  valor_card: number | null;
   valor_club: number | null;
   valor_pdf: number | null;
   valor_cilia: number | null;
@@ -62,41 +67,211 @@ export interface HistoricoEntry {
   executado_por: string | null;
 }
 
-export async function validar(
-  data: string,
-  dryRun: boolean
-): Promise<ValidarResponse> {
-  const url = `${BASE}/validar?data=${encodeURIComponent(data)}&dry_run=${dryRun}`;
-  const resp = await fetch(url, { method: "POST" });
+// ----- Auth -----
+
+export interface UsuarioMe {
+  id: number;
+  username: string;
+  nome: string;
+  email: string | null;
+  perfil_id: number;
+  perfil_nome: string | null;
+  ativo: boolean;
+  must_change_password: boolean;
+  criado_em: string;
+  ultimo_login: string | null;
+}
+
+export interface PerfilApi {
+  id: number;
+  nome: string;
+  descricao: string | null;
+  permissoes: string[];
+  criado_em: string;
+}
+
+interface StoredCreds {
+  username: string;
+  basic: string; // header value: "Basic base64(user:pass)"
+}
+
+export function setAuth(username: string, password: string): void {
+  const basic = "Basic " + btoa(`${username}:${password}`);
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ username, basic }));
+}
+
+export function clearAuth(): void {
+  sessionStorage.removeItem(STORAGE_KEY);
+}
+
+export function getAuth(): StoredCreds | null {
+  const raw = sessionStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function isAuthenticated(): boolean {
+  return getAuth() !== null;
+}
+
+export class AuthError extends Error {
+  constructor(message = "Não autenticado") {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const creds = getAuth();
+  const headers = new Headers(init.headers || {});
+  if (creds) headers.set("Authorization", creds.basic);
+  const resp = await fetch(input, { ...init, headers });
+  if (resp.status === 401) {
+    clearAuth();
+    throw new AuthError();
+  }
+  return resp;
+}
+
+async function asJson<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`${resp.status}: ${txt}`);
+    let detail = "";
+    try {
+      const j = await resp.json();
+      detail = j.detail || JSON.stringify(j);
+    } catch {
+      detail = await resp.text();
+    }
+    throw new Error(`${resp.status}: ${detail}`);
   }
   return resp.json();
 }
 
+// ----- Endpoints de validação -----
+
+export async function validar(
+  data: string,
+  dryRun: boolean,
+): Promise<ValidarResponse> {
+  const url = `${BASE}/validar?data=${encodeURIComponent(data)}&dry_run=${dryRun}`;
+  return asJson(await apiFetch(url, { method: "POST" }));
+}
+
 export async function getHistorico(limite = 30): Promise<HistoricoEntry[]> {
-  const resp = await fetch(`${BASE}/historico?limite=${limite}`);
-  if (!resp.ok) throw new Error(`${resp.status}`);
-  return resp.json();
+  return asJson(await apiFetch(`${BASE}/historico?limite=${limite}`));
 }
 
 export async function getResultados(
-  validacaoId: number
+  validacaoId: number,
 ): Promise<OcResultado[]> {
-  const resp = await fetch(
-    `${BASE}/validacoes/${validacaoId}/resultados`
-  );
-  if (!resp.ok) throw new Error(`${resp.status}`);
-  return resp.json();
+  return asJson(await apiFetch(`${BASE}/validacoes/${validacaoId}/resultados`));
 }
 
 export function urlRelatorioHtml(data: string): string {
+  // Browser não envia Authorization em <a href>; mas o navegador
+  // reusa o cache de credenciais Basic Auth da sessão atual.
   return `${BASE}/relatorio/${data}`;
 }
 
 export function urlRelatorioExcel(data: string): string {
   return `${BASE}/relatorio/${data}/excel`;
+}
+
+// ----- Endpoints de auth -----
+
+export async function authMe(): Promise<UsuarioMe> {
+  return asJson(await apiFetch(`${BASE}/auth/me`));
+}
+
+export async function authTrocarSenha(
+  senhaAtual: string,
+  novaSenha: string,
+): Promise<void> {
+  await asJson(
+    await apiFetch(`${BASE}/auth/trocar-senha`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ senha_atual: senhaAtual, nova_senha: novaSenha }),
+    }),
+  );
+}
+
+export async function tentarLogin(
+  username: string,
+  password: string,
+): Promise<UsuarioMe> {
+  // Seta credenciais temporariamente e bate em /auth/me
+  setAuth(username, password);
+  try {
+    return await authMe();
+  } catch (e) {
+    clearAuth();
+    throw e;
+  }
+}
+
+// ----- Endpoints admin -----
+
+export async function adminListarUsuarios(): Promise<UsuarioMe[]> {
+  return asJson(await apiFetch(`${BASE}/admin/usuarios`));
+}
+
+export async function adminCriarUsuario(payload: {
+  username: string;
+  nome: string;
+  email?: string | null;
+  perfil_id: number;
+  senha_temporaria: string;
+}): Promise<UsuarioMe> {
+  return asJson(
+    await apiFetch(`${BASE}/admin/usuarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function adminAtualizarUsuario(
+  id: number,
+  payload: {
+    nome?: string;
+    email?: string | null;
+    perfil_id?: number;
+    ativo?: boolean;
+  },
+): Promise<UsuarioMe> {
+  return asJson(
+    await apiFetch(`${BASE}/admin/usuarios/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function adminResetSenha(
+  id: number,
+): Promise<{ nova_senha_temporaria: string }> {
+  return asJson(
+    await apiFetch(`${BASE}/admin/usuarios/${id}/reset-senha`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function adminInativarUsuario(id: number): Promise<void> {
+  await asJson(
+    await apiFetch(`${BASE}/admin/usuarios/${id}`, { method: "DELETE" }),
+  );
+}
+
+export async function adminListarPerfis(): Promise<PerfilApi[]> {
+  return asJson(await apiFetch(`${BASE}/admin/perfis`));
 }
 
 // D-1 do dia atual no formato YYYY-MM-DD

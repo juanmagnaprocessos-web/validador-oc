@@ -37,8 +37,230 @@
   .right { text-align: right; }
   .mono { font-family: "SF Mono", Consolas, monospace; }
   .meta { margin-top: 24px; padding: 16px; background: white; border-radius: 8px; font-size: 12px; color: #5a6c7f; }
+  details summary { cursor: pointer; font-size: 11px; color: #5a6c7f; list-style: revert; }
+  details ul { font-size: 11px; margin: 6px 0 0 0; padding-left: 16px; color: #5a6c7f; line-height: 1.5; }
+  details a { color: #2563eb; text-decoration: none; }
+  details a:hover { text-decoration: underline; }
+  /* Botão de copiar placa: ícone discreto ao lado do texto da placa */
+  .placa-wrap { display: inline-flex; align-items: center; gap: 4px; }
+  .btn-copy {
+    cursor: pointer; background: transparent; border: 1px solid #d1d5db;
+    border-radius: 4px; padding: 2px 6px; font-size: 11px; line-height: 1;
+    color: #5a6c7f; transition: background .15s, border-color .15s;
+  }
+  .btn-copy:hover { background: #eef2ff; border-color: #6366f1; color: #1a2332; }
+  .btn-copy:active { background: #c7d2fe; }
+  .btn-copy.copied { background: #d1fae5; border-color: #10b981; color: #065f46; }
+  /* Sub-linha de detalhe (Forma | Cotação | Comprador) */
+  tr.subline td {
+    background: #f8fafc; border-top: 0; padding-top: 4px; padding-bottom: 10px;
+    font-size: 11px; color: #5a6c7f;
+  }
+  tr.subline .lbl { color: #94a3b8; font-weight: 600; text-transform: uppercase;
+                    letter-spacing: .3px; margin-right: 4px; font-size: 10px; }
+  tr.subline .sep { color: #cbd5e1; margin: 0 8px; }
+  /* Lista de peças expansível */
+  details.pecas summary { color: #1a2332; font-weight: 600; font-size: 11px; }
+  details.pecas summary:hover { color: #2563eb; }
+  details.pecas ul { color: #334155; font-size: 12px; }
+  details.pecas li.reincidente {
+    background: #fef2f2; border-left: 3px solid #dc2626; padding: 2px 8px;
+    margin: 2px 0; border-radius: 0 4px 4px 0;
+  }
+  details.pecas li.reincidente::before { content: "🔁 "; }
+  details.pecas li.reincidente strong { color: #991b1b; }
+  /* Toast feedback de cópia (visualmente discreto, acessível via aria-live) */
+  #copy-toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: #1a2332; color: white; padding: 10px 16px;
+    border-radius: 6px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  #copy-toast.show { opacity: 1; }
 </style>
 </head>
+{# ----- macros reusáveis ----- #}
+{% macro cell_reincidencia(label, divs) %}
+  {% set _cores = {
+    'sim_com_devolucao_peca':'#2563eb',
+    'sim_devolucao_outra_peca':'#ea580c',
+    'sim_sem_devolucao':'#dc2626',
+    'sim_sem_devolucao_mesmo_forn':'#dc2626',
+    'sim_mesmo_forn':'#d97706',
+    'sim_outro_forn':'#d97706',
+    'sim_devolucao':'#2563eb',
+    '—':'#9ca3af'
+  } %}
+  {% set _textos = {
+    'sim_com_devolucao_peca':'Devolução da peça ✅',
+    'sim_devolucao_outra_peca':'Devolução de OUTRA peça ⚠️',
+    'sim_sem_devolucao':'SEM devolução ❌',
+    'sim_sem_devolucao_mesmo_forn':'SEM devolução (mesmo forn.) ❌',
+    'sim_mesmo_forn':'Mesmo fornecedor',
+    'sim_outro_forn':'Outro fornecedor',
+    'sim_devolucao':'Devolução aberta',
+    '—':'—'
+  } %}
+  {% set _cor = _cores.get(label, '#9ca3af') %}
+  {% set _txt = _textos.get(label, label) %}
+  <span style="color:{{ _cor }};font-weight:600;">{{ _txt }}</span>
+  {% if divs %}
+    <details style="margin-top:4px;">
+      <summary>{{ divs|length }} peça(s) reincidentes</summary>
+      <ul style="font-size:11px;margin:4px 0 0 0;padding-left:14px;">
+        {% for div in divs %}
+          {% set d = div.dados or {} %}
+          <li style="margin-bottom:6px;">
+            <strong>{{ d.get('descricao_peca','—') }}</strong>
+            — {{ d.get('data_anterior','—') }}
+            (OC {{ d.get('oc_anterior','—') }}, {{ d.get('fornecedor_anterior_nome','—') }})
+            {% if d.get('link_oc_anterior') %} <a href="{{ d.get('link_oc_anterior') }}" target="_blank">[OC anterior]</a>{% endif %}
+            <br>
+            {% if d.get('tem_devolucao_peca') %}
+              <span style="color:#2563eb;">✅ Devolução da peça</span>
+              {% if d.get('peca_descricao_devolucao') %} ({{ d.get('peca_descricao_devolucao') }}){% endif %}
+              {% if d.get('link_devolucao') %} <a href="{{ d.get('link_devolucao') }}" target="_blank">[Ver card]</a>{% endif %}
+            {% elif d.get('tem_devolucao_outra_peca') %}
+              <span style="color:#ea580c;">⚠️ Devolução de outra peça</span>
+              {% if d.get('peca_descricao_devolucao') %} ({{ d.get('peca_descricao_devolucao') }}){% endif %}
+              {% if d.get('link_devolucao') %} <a href="{{ d.get('link_devolucao') }}" target="_blank">[Ver card]</a>{% endif %}
+            {% else %}
+              <span style="color:#dc2626;font-weight:700;">❌ Nenhum card de devolução — ALERTAR ANALISTA</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+{% endmacro %}
+{% macro cell_cancelamento(label, card_id) %}
+  {% set _cor = {'info_incorretas':'#ea580c','cancelado':'#dc2626','ambos':'#dc2626','—':'#9ca3af'}[label] %}
+  {% set _txt = {'info_incorretas':'Em revisão','cancelado':'Cancelado','ambos':'Cancelado (rev.)','—':'—'}[label] %}
+  <span style="color:{{ _cor }};font-weight:600;">{{ _txt }}</span>
+  {% if card_id %}
+    <div style="margin-top:4px;">
+      <a href="https://app.pipefy.com/pipes/{{ pipe_id }}#cards/{{ card_id }}" target="_blank" rel="noreferrer"
+         style="color:#2563eb;font-size:11px;text-decoration:underline;">Ver card</a>
+    </div>
+  {% endif %}
+{% endmacro %}
+{# Placa com botão de copiar ao clipboard. O botão não tem acento na descrição
+   pra evitar problemas com encoding. O JS inline cuida de feedback. #}
+{% macro cell_placa_copiavel(placa) %}
+  <span class="placa-wrap mono">
+    {{ placa or "—" }}
+    {% if placa %}
+      <button type="button" class="btn-copy" data-copy="{{ placa }}"
+              aria-label="Copiar placa {{ placa }}" title="Copiar placa">📋</button>
+    {% endif %}
+  </span>
+{% endmacro %}
+{# Lista expansível de peças. Marca em vermelho as peças cujo `chave_produto`
+   está na lista de reincidentes da OC (pré-computada pelo orchestrator). #}
+{% macro cell_pecas(produtos, chaves_reincidentes, divs_cross, duplicidades_placa) %}
+  {% if produtos %}
+    {# Monta mapa de divergências cross-time por chave_produto para lookup rápido #}
+    {% set _divs_map = {} %}
+    {% if divs_cross %}
+      {% for div in divs_cross %}
+        {% set d = div.dados or {} %}
+        {% if d.get('chave_produto') %}
+          {% set _ = _divs_map.update({d.get('chave_produto'): d}) %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    {% set _qtd_reinc = chaves_reincidentes|length %}
+    {% set _qtd_hist = (duplicidades_placa or [])|length %}
+    <details class="pecas">
+      <summary>📦 {{ produtos|length }} peça(s){% if _qtd_reinc %} <span style="color:#dc2626;">({{ _qtd_reinc }} duplicada{{ 's' if _qtd_reinc > 1 else '' }} ⚠️)</span>{% endif %}{% if _qtd_hist %} <span style="color:#ea580c;">(+{{ _qtd_hist }} alerta{{ 's' if _qtd_hist > 1 else '' }} placa)</span>{% endif %}</summary>
+      <ul>
+        {% for p in produtos %}
+          {% set _ean = (p.ean or '')|string|trim %}
+          {% set _cod = (p.cod_interno or '')|string|trim %}
+          {% set _desc = (p.descricao or '')|string|trim|lower %}
+          {% if _ean %}{% set _chave = 'ean:' ~ _ean %}
+          {% elif _cod %}{% set _chave = 'cod:' ~ _cod %}
+          {% else %}{% set _chave = 'desc:' ~ _desc %}
+          {% endif %}
+          {% set _eh_reinc = _chave in chaves_reincidentes %}
+          {% set _div_data = _divs_map.get(_chave, {}) %}
+          <li{% if _eh_reinc %} class="reincidente"{% endif %} style="margin-bottom:4px;">
+            <strong>{{ p.descricao or "(sem descrição)" }}</strong>
+            {% if p.quantidade %} — qtd: {{ p.quantidade }}{% endif %}
+            {% if p.ean %} <span style="color:#94a3b8;">[EAN {{ p.ean }}]</span>{% endif %}
+            {% if _eh_reinc %}
+              <br>
+              <span style="color:#dc2626;font-weight:600;">⚠ Duplicada</span>
+              — OC anterior: {{ _div_data.get('oc_anterior','—') }} ({{ _div_data.get('data_anterior','—') }})
+              {% if _div_data.get('link_oc_anterior') %}<a href="{{ _div_data.get('link_oc_anterior') }}" target="_blank">[ver OC]</a>{% endif %}
+              <br>
+              {% if _div_data.get('tem_devolucao_peca') %}
+                <span style="color:#2563eb;">✅ Devolução aberta</span>
+                {% if _div_data.get('peca_descricao_devolucao') %}({{ _div_data.get('peca_descricao_devolucao') }}){% endif %}
+                {% if _div_data.get('link_devolucao') %}<a href="{{ _div_data.get('link_devolucao') }}" target="_blank">[ver card]</a>{% endif %}
+              {% elif _div_data.get('tem_devolucao_outra_peca') %}
+                <span style="color:#ea580c;">⚠️ Devolução de outra peça</span>
+                {% if _div_data.get('peca_descricao_devolucao') %}({{ _div_data.get('peca_descricao_devolucao') }}){% endif %}
+                {% if _div_data.get('link_devolucao') %}<a href="{{ _div_data.get('link_devolucao') }}" target="_blank">[ver card]</a>{% endif %}
+              {% else %}
+                <span style="color:#dc2626;font-weight:700;">❌ Sem devolução — ALERTAR</span>
+              {% endif %}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      {# --- Outras duplicidades históricas da placa (peças NÃO na OC atual) --- #}
+      {% if duplicidades_placa %}
+        <div style="margin-top:8px;padding:8px;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:4px;">
+          <strong style="color:#92400e;font-size:12px;">⚠ Outras duplicidades desta placa (90d):</strong>
+          <ul style="font-size:11px;margin:4px 0 0 0;padding-left:14px;">
+            {% for dup in duplicidades_placa %}
+              <li style="margin-bottom:6px;">
+                <strong>{{ dup.descricao }}</strong> — {{ dup.total_ocorrencias }}x comprada
+                <br>
+                {% for oc in dup.ocs %}
+                  OC {{ oc.id_pedido }} ({{ oc.data_oc }}, {{ oc.fornecedor }})
+                  {% if oc.link_card %}<a href="{{ oc.link_card }}" target="_blank">[card]</a>{% endif %}
+                  {% if not loop.last %} · {% endif %}
+                {% endfor %}
+                <br>
+                {% if dup.tem_devolucao %}
+                  <span style="color:#2563eb;">✅ Devolução aberta</span>
+                  {% if dup.link_devolucao %}<a href="{{ dup.link_devolucao }}" target="_blank">[ver card]</a>{% endif %}
+                {% else %}
+                  <span style="color:#dc2626;font-weight:700;">❌ Sem devolução — ALERTAR EQUIPE</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </details>
+  {% else %}
+    <span style="color:#9ca3af;font-size:11px;">—</span>
+  {% endif %}
+{% endmacro %}
+{# Modo deeplink: link clicável para verificação manual no Cilia. O Cilia
+   não permite scraping (reCAPTCHA Enterprise), então o analista clica
+   no link, faz login no Cilia e busca a placa para confirmar peças. #}
+{% macro cell_cilia(placa) %}
+  {% if cilia_mode == 'deeplink' %}
+    {% set placa_busca = placa or '' %}
+    <a href="{{ cilia_base_url }}/users/sign_in" target="_blank" rel="noreferrer"
+       style="color:#2563eb;font-size:12px;text-decoration:underline;font-weight:600;">
+      🔗 Verificar
+    </a>
+    {% if placa_busca %}
+      <div style="font-size:10px;color:#5a6c7f;margin-top:2px;font-family:monospace;">
+        placa: {{ placa_busca }}
+      </div>
+    {% endif %}
+  {% elif cilia_mode == 'off' %}
+    <span style="color:#9ca3af;">—</span>
+  {% else %}
+    <span style="color:#9ca3af;font-size:11px;">{{ cilia_mode }}</span>
+  {% endif %}
+{% endmacro %}
 <body>
   <h1>Validação de Ordens de Compra — {{ data_d1 }}</h1>
   <div class="sub">Gerado em {{ gerado_em }} · Executado por {{ executado_por }} · {{ 'DRY-RUN' if dry_run else 'APLICADO' }}</div>
@@ -52,18 +274,37 @@
     <div class="card muted"><div class="lbl">Já processadas</div><div class="num">{{ ja_processadas }}</div></div>
   </div>
 
+  {% if modo_operacao == 'consulta' %}
+  <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#92400e;font-size:13px;">
+    ⚠️ <strong>MODO CONSULTA</strong> — Nenhuma ação foi aplicada no Pipefy nem e-mails enviados. As ações sugeridas estão na coluna "Ação sugerida".
+  </div>
+  {% endif %}
+
+  {# Modo deeplink: Valor Cilia é sempre vazio, omitimos a coluna.
+     Modo stub/http: mostramos a coluna porque tem dados úteis. #}
+  {% set _show_valor_cilia = cilia_mode in ('stub','http') %}
+  {# Largura das colunas (colspan da sub-linha) — calculado dinamicamente
+     com base no que está visível. Hoje a base é 17, +1 se valor_cilia,
+     +1 se cilia_mode!=off. #}
+  {% set _ncols = 17 + (1 if _show_valor_cilia else 0) + (1 if cilia_mode != 'off' else 0) %}
   <table>
     <thead>
       <tr>
         <th>Nº OC</th>
         <th>Placa</th>
         <th>Fornecedor</th>
+        <th class="right">Valor Card</th>
         <th class="right">Valor Club</th>
         <th class="right">Valor PDF</th>
-        <th class="right">Valor Cilia</th>
-        <th class="right">Cot.</th>
-        <th>Dup?</th>
+        {% if _show_valor_cilia %}<th class="right">Valor Cilia</th>{% endif %}
+        <th class="right">Qtd Cotações</th>
+        <th>Peça Duplicada</th>
+        <th>Reincidência (90d)</th>
+        <th>Cancelamento</th>
+        {% if cilia_mode != 'off' %}<th>Cília</th>{% endif %}
         <th>Status</th>
+        <th>Ação Sugerida</th>
+        <th>Card</th>
         <th>Motivo</th>
         <th>Fase Atual</th>
         <th>Fase Destino</th>
@@ -73,14 +314,23 @@
     {% for r in resultados %}
       <tr>
         <td class="mono">{{ r.oc.id_pedido }}</td>
-        <td class="mono">{{ r.oc.identificador or "—" }}</td>
+        <td>{{ cell_placa_copiavel(r.oc.identificador) }}</td>
         <td>{{ (r.oc.fornecedor.for_nome if r.oc.fornecedor else "") or "—" }}</td>
+        <td class="right mono"><strong>{{ "R$ %.2f"|format(r.valor_card) if r.valor_card else "—" }}</strong></td>
         <td class="right mono">{{ "R$ %.2f"|format(r.valor_club) if r.valor_club else "—" }}</td>
         <td class="right mono">{{ "R$ %.2f"|format(r.valor_pdf) if r.valor_pdf else "—" }}</td>
-        <td class="right mono">{{ "R$ %.2f"|format(r.valor_cilia) if r.valor_cilia else "—" }}</td>
+        {% if _show_valor_cilia %}<td class="right mono">{{ "R$ %.2f"|format(r.valor_cilia) if r.valor_cilia else "—" }}</td>{% endif %}
         <td class="right">{{ r.qtd_cotacoes or 0 }}</td>
         <td>{{ r.peca_duplicada }}</td>
+        <td>{{ cell_reincidencia(r.reincidencia, r.divergencias_cross) }}</td>
+        <td>{{ cell_cancelamento(r.cancelamento, r.cancelamento_card_id) }}</td>
+        {% if cilia_mode != 'off' %}<td>{{ cell_cilia(r.oc.identificador) }}</td>{% endif %}
         <td><span class="tag {{ r.status.value }}">{{ {'aprovada':'Aprovada','divergencia':'Divergência','bloqueada':'Bloqueada','aguardando_ml':'ML — Manual','ja_processada':'Já processada'}[r.status.value] }}</span></td>
+        <td>{{ acao_sugerida(r) }}</td>
+        <td>
+          {% set lk = link_card(r.card_pipefy_id) %}
+          {% if lk %}<a href="{{ lk }}" target="_blank" rel="noopener">abrir</a>{% else %}—{% endif %}
+        </td>
         <td class="motivo">
           {%- if r.status.value == 'aguardando_ml' -%}
             Fornecedor Mercado Livre — requer validação manual
@@ -93,14 +343,130 @@
         <td>{{ r.fase_pipefy_atual or "—" }}</td>
         <td>{{ r.fase_destino.value if r.fase_destino else "—" }}</td>
       </tr>
+      {# Sub-linha cinza com Forma de Pagamento + Cotação + Comprador + botão Peças #}
+      <tr class="subline">
+        <td colspan="{{ _ncols }}">
+          <span class="lbl">Forma:</span>{{ r.forma_pagamento_canonica or "—" }}
+          <span class="sep">·</span>
+          <span class="lbl">Cotação:</span><span class="mono">{{ r.oc.id_cotacao or "—" }}</span>
+          <span class="sep">·</span>
+          <span class="lbl">Comprador:</span>{{ r.oc.comprador_nome or ("#" ~ r.oc.created_by if r.oc.created_by else "—") }}
+          <span class="sep">·</span>
+          {{ cell_pecas(r.produtos, r.chaves_reincidentes, r.divergencias_cross, r.duplicidades_placa) }}
+        </td>
+      </tr>
     {% endfor %}
     </tbody>
   </table>
+
+  {% if ocs_orfas %}
+  <h2 style="margin-top:32px;font-size:18px;">OCs sem card no Pipefy ({{ ocs_orfas|length }})</h2>
+  <p style="color:#5a6c7f;font-size:13px;margin-top:0;">Pedidos do Club que não têm card correspondente no Pipefy. Pode indicar atraso na criação do card pelo comprador.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Nº Pedido</th>
+        <th>Cotação</th>
+        <th>Placa</th>
+        <th>Fornecedor</th>
+        <th>Comprador</th>
+        <th>Forma</th>
+        <th class="right">Valor Club</th>
+        <th>Qtd Itens</th>
+        <th>Peça Duplicada</th>
+        <th>Reincidência (90d)</th>
+        <th>Cancelamento</th>
+        {% if cilia_mode != 'off' %}<th>Cília</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% set _ncols_orfas = 11 + (1 if cilia_mode != 'off' else 0) %}
+    {% for o in ocs_orfas %}
+      <tr>
+        <td class="mono">{{ o.id_pedido }}</td>
+        <td class="mono">{{ o.id_cotacao or "—" }}</td>
+        <td>{{ cell_placa_copiavel(o.identificador) }}</td>
+        <td>{{ o.fornecedor or "—" }}</td>
+        <td>{{ o.comprador or "—" }}</td>
+        <td>{{ o.forma_pagamento or "—" }}</td>
+        <td class="right mono">{{ "R$ %.2f"|format(o.valor) if o.valor else "—" }}</td>
+        <td class="right">{{ o.qtd_produtos if o.qtd_produtos is not none else "—" }}</td>
+        <td>{{ o.peca_duplicada }}</td>
+        <td>{{ cell_reincidencia(o.reincidencia, o.divergencias) }}</td>
+        <td>{{ cell_cancelamento(o.cancelamento, o.cancelamento_card_id) }}</td>
+        {% if cilia_mode != 'off' %}<td>{{ cell_cilia(o.identificador) }}</td>{% endif %}
+      </tr>
+      <tr class="subline">
+        <td colspan="{{ _ncols_orfas }}">
+          {{ cell_pecas(o.produtos, o.chaves_reincidentes, o.divergencias, o.duplicidades_placa) }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 
   <div class="meta">
     Pipe Pipefy: <span class="mono">{{ pipe_id }}</span> ·
     Validador: <span class="mono">{{ executado_por }}</span> ·
     Rastreabilidade: cada chamada de API foi registrada em <span class="mono">auditoria_api</span>.
   </div>
+
+  <!-- Toast acessível para feedback de "copiado" -->
+  <div id="copy-toast" role="status" aria-live="polite"></div>
+
+  <!--
+    JavaScript inline (puro client-side, sem chamadas externas):
+      - Listener delegado para botões .btn-copy → copia data-copy ao clipboard
+      - Fallback document.execCommand para browsers antigos
+      - Feedback visual (botão pisca verde) + aria-live (toast)
+    Limite: se este script crescer >50 linhas, refatorar para frontend React.
+  -->
+  <script>
+    (function () {
+      const toast = document.getElementById('copy-toast');
+      function showToast(msg) {
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(function () { toast.classList.remove('show'); }, 1800);
+      }
+      function copyFallback(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(text); return true; }
+          catch (_) { copyFallback(text); return true; }
+        }
+        copyFallback(text);
+        return true;
+      }
+      document.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('.btn-copy');
+        if (!btn) return;
+        ev.preventDefault();
+        const text = btn.getAttribute('data-copy') || '';
+        if (!text) return;
+        copyText(text).then(function () {
+          btn.classList.add('copied');
+          const orig = btn.textContent;
+          btn.textContent = '✓';
+          showToast('Copiado: ' + text);
+          setTimeout(function () {
+            btn.classList.remove('copied');
+            btn.textContent = orig;
+          }, 1500);
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

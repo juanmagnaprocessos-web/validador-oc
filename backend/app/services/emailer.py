@@ -110,6 +110,17 @@ def enviar_notificacoes(
             )
         return stats
 
+    # Modo consulta: nunca envia, mesmo com EMAIL_ENABLED=true.
+    # O `force=True` (CLI explícito) ignora esse guard para permitir
+    # testes manuais do envio.
+    if settings.modo_operacao != "automatico" and not force:
+        logger.info(
+            "MODO CONSULTA — %d envio(s) planejado(s) mas NÃO disparados "
+            "(modo_operacao=%s). Use --force para enviar manualmente.",
+            len(planejados), settings.modo_operacao,
+        )
+        return stats
+
     if not settings.email_enabled and not force:
         logger.info(
             "EMAIL_ENABLED=false — %d envio(s) planejado(s) mas não disparados "

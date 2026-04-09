@@ -43,7 +43,7 @@ async def cmd_validar(args: argparse.Namespace) -> int:
     )
 
     try:
-        validacao_id, resultados = await executar_validacao(
+        validacao_id, resultados, ocs_orfas = await executar_validacao(
             data_d1, dry_run=dry_run
         )
     except Exception as e:
@@ -51,8 +51,8 @@ async def cmd_validar(args: argparse.Namespace) -> int:
         raise
 
     # Relatórios
-    html_path = gerar_html(data_d1, resultados, dry_run=dry_run)
-    xlsx_path = gerar_excel(data_d1, resultados)
+    html_path = gerar_html(data_d1, resultados, dry_run=dry_run, ocs_orfas=ocs_orfas)
+    xlsx_path = gerar_excel(data_d1, resultados, ocs_orfas=ocs_orfas)
 
     # E-mails
     if args.email:
@@ -194,6 +194,63 @@ def cmd_compradores(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_criar_admin(args: argparse.Namespace) -> int:
+    """Bootstrap do primeiro usuário Admin do sistema.
+
+    Cria o perfil 'Admin' (com permissão '*') se não existir e cria
+    um usuário com `must_change_password=True`.
+    """
+    from app.db import (
+        criar_perfil,
+        criar_usuario,
+        get_perfil_por_nome,
+        get_usuario_por_username,
+        init_db,
+    )
+    from app.services.auth import gerar_senha_temporaria, hash_senha
+
+    init_db()
+
+    if get_usuario_por_username(args.username):
+        console.print(f"[red]Já existe usuário '{args.username}'.[/red]")
+        return 1
+
+    perfil = get_perfil_por_nome("Admin")
+    if perfil:
+        perfil_id = perfil["id"]
+        console.print(f"[dim]Perfil 'Admin' já existe (id={perfil_id}).[/dim]")
+    else:
+        perfil_id = criar_perfil(
+            "Admin",
+            "Acesso total ao sistema",
+            ["*"],
+        )
+        console.print(f"[green]Perfil 'Admin' criado (id={perfil_id}).[/green]")
+
+    senha = args.senha or gerar_senha_temporaria()
+    if len(senha) < 8:
+        console.print("[red]Senha precisa ter no mínimo 8 caracteres.[/red]")
+        return 1
+
+    novo_id = criar_usuario(
+        username=args.username,
+        nome=args.nome,
+        email=args.email,
+        senha_hash=hash_senha(senha),
+        perfil_id=perfil_id,
+        must_change_password=True,
+    )
+
+    console.print(
+        f"\n[green bold]Usuario Admin criado com sucesso![/green bold]\n"
+        f"  id:        {novo_id}\n"
+        f"  username:  [cyan]{args.username}[/cyan]\n"
+        f"  nome:      {args.nome}\n"
+        f"  senha:     [yellow]{senha}[/yellow]  (guarde! sera exigida troca no 1o login)\n"
+    )
+    return 0
+
+
 def cmd_historico(args: argparse.Namespace) -> int:
     hist = listar_historico(args.limite)
     tbl = Table(title="Histórico de validações")
@@ -249,6 +306,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--limite", type=int, default=20
     )
 
+    # criar-admin
+    ca = sub.add_parser("criar-admin", help="Cria o primeiro usuário Admin")
+    ca.add_argument("--username", required=True)
+    ca.add_argument("--nome", required=True)
+    ca.add_argument("--email", default=None)
+    ca.add_argument("--senha", default=None, help="Se omitida, gera uma temporária")
+
     # compradores
     comp = sub.add_parser("compradores", help="Gerencia a tabela de compradores")
     comp_sub = comp.add_subparsers(dest="acao", required=True)
@@ -277,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_historico(args)
     if args.cmd == "compradores":
         return cmd_compradores(args)
+    if args.cmd == "criar-admin":
+        return cmd_criar_admin(args)
 
     return 1
 
