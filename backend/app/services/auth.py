@@ -27,7 +27,7 @@ from app.models import Usuario
 
 logger = get_logger(__name__)
 
-_security = HTTPBasic(realm="Validador OC")
+_security = HTTPBasic(realm="Validador OC", auto_error=False)
 
 _BCRYPT_MAX_BYTES = 72
 
@@ -78,27 +78,31 @@ def _carregar_usuario_com_perfil(row: dict) -> Usuario:
 
 
 def get_current_user(
-    credentials: HTTPBasicCredentials = Depends(_security),
+    credentials: HTTPBasicCredentials | None = Depends(_security),
 ) -> Usuario:
     """Dependency: valida Basic Auth e retorna o usuário autenticado.
 
-    Erros levantam 401 com `WWW-Authenticate: Basic` para o navegador
-    abrir o popup de login. Comparações usam `secrets.compare_digest`
-    onde possível para evitar timing attacks no nome de usuário.
+    Usa auto_error=False para evitar que o navegador mostre o popup
+    nativo de HTTP Basic Auth (WWW-Authenticate: Basic). O frontend
+    gerencia o login via formulário proprio.
     """
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais não fornecidas",
+        )
+
     row = get_usuario_por_username(credentials.username)
     if not row or not row.get("ativo"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas",
-            headers={"WWW-Authenticate": "Basic"},
         )
 
     if not verificar_senha(credentials.password, row["senha_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas",
-            headers={"WWW-Authenticate": "Basic"},
         )
 
     registrar_login(row["id"])
