@@ -138,17 +138,18 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 }
 
 async function asJson<T>(resp: Response): Promise<T> {
+  const text = await resp.text();
   if (!resp.ok) {
     let detail = "";
     try {
-      const j = await resp.json();
+      const j = JSON.parse(text);
       detail = j.detail || JSON.stringify(j);
     } catch {
-      detail = await resp.text();
+      detail = text;
     }
     throw new Error(`${resp.status}: ${detail}`);
   }
-  return resp.json();
+  return JSON.parse(text);
 }
 
 // ----- Endpoints de validação -----
