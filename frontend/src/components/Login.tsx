@@ -1,11 +1,18 @@
 import { useState } from "react";
-import { tentarLogin, UsuarioMe } from "../api/client";
+import { useAuth } from "../contexts/AuthContext";
+import { Spinner } from "./Spinner";
+import {
+  COLORS,
+  SHADOWS,
+  RADIUS,
+  baseInput,
+  baseLabel,
+  btnPrimary,
+  errorBox,
+} from "../styles/theme";
 
-interface Props {
-  onLogin: (user: UsuarioMe) => void;
-}
-
-export function Login({ onLogin }: Props) {
+export function Login() {
+  const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [erro, setErro] = useState<string | null>(null);
@@ -16,13 +23,12 @@ export function Login({ onLogin }: Props) {
     setErro(null);
     setEnviando(true);
     try {
-      const u = await tentarLogin(username.trim(), password);
-      onLogin(u);
+      await login(username.trim(), password);
     } catch (err: unknown) {
       setErro(
         err instanceof Error
           ? err.message.includes("401")
-            ? "Usuário ou senha incorretos"
+            ? "Usuario ou senha incorretos"
             : err.message
           : "Falha no login",
       );
@@ -38,27 +44,28 @@ export function Login({ onLogin }: Props) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#f4f6fa",
+        background: COLORS.bg,
       }}
     >
       <form
         onSubmit={submit}
         style={{
-          background: "white",
-          padding: 32,
-          borderRadius: 12,
-          boxShadow: "0 4px 12px rgba(0,0,0,.08)",
-          width: 360,
+          background: COLORS.bgWhite,
+          padding: 36,
+          borderRadius: RADIUS.lg,
+          boxShadow: SHADOWS.md,
+          width: 380,
         }}
+        aria-label="Formulario de login"
       >
-        <h1 style={{ margin: 0, fontSize: 22, color: "#1a2332" }}>
+        <h1 style={{ margin: 0, fontSize: 24, color: COLORS.text, letterSpacing: -0.3 }}>
           Validador OC
         </h1>
-        <p style={{ color: "#5a6c7f", fontSize: 13, marginTop: 4, marginBottom: 24 }}>
-          Magna Proteção · Acesso restrito
+        <p style={{ color: COLORS.textSecondary, fontSize: 13, marginTop: 4, marginBottom: 28 }}>
+          Magna Protecao -- Acesso restrito
         </p>
 
-        <label style={lbl}>Usuário</label>
+        <label style={{ ...baseLabel, marginTop: 12 }}>Usuario</label>
         <input
           type="text"
           value={username}
@@ -66,70 +73,43 @@ export function Login({ onLogin }: Props) {
           autoFocus
           required
           autoComplete="username"
-          style={inp}
+          style={baseInput}
+          aria-label="Nome de usuario"
         />
 
-        <label style={lbl}>Senha</label>
+        <label style={{ ...baseLabel, marginTop: 16 }}>Senha</label>
         <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
           autoComplete="current-password"
-          style={inp}
+          style={baseInput}
+          aria-label="Senha"
         />
 
         {erro && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 10,
-              background: "#fecaca",
-              color: "#991b1b",
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          >
+          <div style={{ ...errorBox, marginTop: 14 }} role="alert">
             {erro}
           </div>
         )}
 
-        <button type="submit" disabled={enviando} style={btn}>
-          {enviando ? "Entrando..." : "Entrar"}
+        <button
+          type="submit"
+          disabled={enviando}
+          style={{ ...btnPrimary, marginTop: 24, width: "100%", padding: "12px 20px" }}
+          aria-label={enviando ? "Entrando no sistema" : "Entrar"}
+        >
+          {enviando ? (
+            <>
+              <Spinner size={16} color="#ffffff" />
+              Entrando...
+            </>
+          ) : (
+            "Entrar"
+          )}
         </button>
       </form>
     </div>
   );
 }
-
-const lbl: React.CSSProperties = {
-  display: "block",
-  fontSize: 12,
-  color: "#5a6c7f",
-  marginTop: 12,
-  marginBottom: 4,
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-
-const inp: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  border: "1px solid #d1d5db",
-  borderRadius: 6,
-  fontSize: 14,
-  boxSizing: "border-box",
-};
-
-const btn: React.CSSProperties = {
-  marginTop: 20,
-  width: "100%",
-  background: "#2563eb",
-  color: "white",
-  border: 0,
-  borderRadius: 6,
-  padding: "12px 20px",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};

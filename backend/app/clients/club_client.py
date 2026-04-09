@@ -23,6 +23,7 @@ from tenacity import (
 from app.config import settings
 from app.db import registrar_chamada_api
 from app.logging_setup import get_logger
+from app.utils.circuit_breaker import CircuitBreaker
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,7 @@ class ClubClient:
         self._base_v3 = settings.club_api_base_v3
         self._token: str | None = None
         self._last_request_at: float = 0.0
+        self._breaker = CircuitBreaker("club", fail_threshold=5, reset_timeout=60)
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"User-Agent": "validador-oc/0.1 (Magna Protecao)"},
@@ -134,6 +136,18 @@ class ClubClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Request protegida por circuit breaker."""
+        return await self._breaker.call(
+            self._do_request, method, url, params=params
+        )
+
+    async def _do_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Request com retry exponencial e refresh de token em 401."""
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(settings.club_max_retries),
@@ -172,7 +186,7 @@ class ClubClient:
 
                 return resp.json()
 
-        raise ClubAPIError(f"Falha após retries em {url}")  # unreachable
+        raise ClubAPIError(f"Falha apos retries em {url}")  # unreachable
 
     def _audit(
         self,

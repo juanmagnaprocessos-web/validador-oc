@@ -5,12 +5,17 @@ Usa sqlite3 raw, sem ORM, seguindo o padrão do projeto gestao-pop.
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterator
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMA = """
@@ -234,8 +239,48 @@ def init_db() -> None:
         for idx_sql in _POST_MIGRATION_INDEXES:
             conn.execute(idx_sql)
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA synchronous=FULL;")
+        conn.execute("PRAGMA wal_autocheckpoint=1000;")
         conn.commit()
+
+
+def backup_db() -> Path:
+    """Cria backup do banco antes de operações críticas.
+
+    - Faz WAL checkpoint para garantir que o .db está completo
+    - Copia o arquivo .db para .db.bak.<timestamp>
+    - Mantém apenas os últimos 5 backups (deleta os mais antigos)
+    - Retorna o Path do backup criado
+    """
+    db_path = Path(settings.db_full_path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"Banco não encontrado: {db_path}")
+
+    # WAL checkpoint — força tudo pro .db antes de copiar
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    finally:
+        conn.close()
+
+    # Cria backup com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = db_path.with_suffix(f".db.bak.{timestamp}")
+    shutil.copy2(str(db_path), str(backup_path))
+    logger.info("Backup criado: %s", backup_path)
+
+    # Mantém apenas os últimos 5 backups
+    padrao = f"{db_path.stem}.db.bak.*"
+    backups = sorted(
+        db_path.parent.glob(padrao),
+        key=lambda p: p.stat().st_mtime,
+    )
+    while len(backups) > 5:
+        antigo = backups.pop(0)
+        antigo.unlink()
+        logger.info("Backup antigo removido: %s", antigo)
+
+    return backup_path
 
 
 @contextmanager
@@ -338,6 +383,9 @@ def registrar_chamada_api(
     duracao_ms: int,
     erro: str | None = None,
 ) -> None:
+    from app.utils.sanitize import sanitizar_url
+
+    url_limpa = sanitizar_url(url)
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO auditoria_api
@@ -347,7 +395,7 @@ def registrar_chamada_api(
                 datetime.now().isoformat(timespec="seconds"),
                 sistema,
                 metodo,
-                url,
+                url_limpa,
                 status_code,
                 duracao_ms,
                 erro,
@@ -730,20 +778,29 @@ def dias_presentes_no_historico(
 def atualizar_cache_devolucoes(linhas: list[dict[str, Any]]) -> int:
     """Substitui (TRUNCATE + INSERT) o cache local de devoluções abertas.
     `linhas` é uma lista de dicts com as chaves do schema. Retorna o
-    número de linhas inseridas."""
+    número de linhas inseridas.
+
+    Usa SAVEPOINT para garantir atomicidade: se o INSERT falhar, o
+    DELETE é revertido e o cache antigo permanece intacto."""
     agora = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
-        conn.execute("DELETE FROM cache_devolucoes")
-        if linhas:
-            conn.executemany(
-                """INSERT INTO cache_devolucoes
-                   (placa_normalizada, card_id, n_oc, peca_descricao,
-                    fase_atual, atualizado_em)
-                   VALUES (:placa_normalizada, :card_id, :n_oc,
-                           :peca_descricao, :fase_atual, :atualizado_em)""",
-                [{**l, "atualizado_em": agora} for l in linhas],
-            )
-        conn.commit()
+        conn.execute("SAVEPOINT cache_devolucoes_update")
+        try:
+            conn.execute("DELETE FROM cache_devolucoes")
+            if linhas:
+                conn.executemany(
+                    """INSERT INTO cache_devolucoes
+                       (placa_normalizada, card_id, n_oc, peca_descricao,
+                        fase_atual, atualizado_em)
+                       VALUES (:placa_normalizada, :card_id, :n_oc,
+                               :peca_descricao, :fase_atual, :atualizado_em)""",
+                    [{**l, "atualizado_em": agora} for l in linhas],
+                )
+            conn.execute("RELEASE SAVEPOINT cache_devolucoes_update")
+            conn.commit()
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT cache_devolucoes_update")
+            raise
         return len(linhas)
 
 
@@ -782,20 +839,29 @@ def get_devolucoes_por_oc(n_oc: str) -> list[dict[str, Any]]:
 def atualizar_cache_cancelamentos(linhas: list[dict[str, Any]]) -> int:
     """Substitui (TRUNCATE + INSERT) o cache local de cards em fases de
     cancelamento do pipe principal. `linhas` é uma lista de dicts com as
-    chaves do schema. Retorna o número de linhas inseridas."""
+    chaves do schema. Retorna o número de linhas inseridas.
+
+    Usa SAVEPOINT para garantir atomicidade: se o INSERT falhar, o
+    DELETE é revertido e o cache antigo permanece intacto."""
     agora = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
-        conn.execute("DELETE FROM cache_cancelamentos")
-        if linhas:
-            conn.executemany(
-                """INSERT INTO cache_cancelamentos
-                   (placa_normalizada, card_id, tipo, fase_atual,
-                    descricao_pecas, codigo_oc, atualizado_em)
-                   VALUES (:placa_normalizada, :card_id, :tipo, :fase_atual,
-                           :descricao_pecas, :codigo_oc, :atualizado_em)""",
-                [{**l, "atualizado_em": agora} for l in linhas],
-            )
-        conn.commit()
+        conn.execute("SAVEPOINT cache_cancelamentos_update")
+        try:
+            conn.execute("DELETE FROM cache_cancelamentos")
+            if linhas:
+                conn.executemany(
+                    """INSERT INTO cache_cancelamentos
+                       (placa_normalizada, card_id, tipo, fase_atual,
+                        descricao_pecas, codigo_oc, atualizado_em)
+                       VALUES (:placa_normalizada, :card_id, :tipo, :fase_atual,
+                               :descricao_pecas, :codigo_oc, :atualizado_em)""",
+                    [{**l, "atualizado_em": agora} for l in linhas],
+                )
+            conn.execute("RELEASE SAVEPOINT cache_cancelamentos_update")
+            conn.commit()
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT cache_cancelamentos_update")
+            raise
         return len(linhas)
 
 

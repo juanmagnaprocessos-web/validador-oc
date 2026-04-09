@@ -27,11 +27,12 @@ def _norm_label(s: str) -> str:
 
 import httpx
 
-from app.clients.pdf_parser import extrair_valor_total
+from app.clients.pdf_parser import extrair_valor_total, extrair_valor_total_async
 from app.config import settings
 from app.db import registrar_chamada_api
 from app.logging_setup import get_logger
 from app.models import CardPipefy
+from app.utils.circuit_breaker import CircuitBreaker
 
 logger = get_logger(__name__)
 
@@ -91,6 +92,7 @@ class PipefyClient:
         self._url = settings.pipefy_api_url
         self.ids = ids  # lazy load se None
         self.dry_run = dry_run
+        self._breaker = CircuitBreaker("pipefy", fail_threshold=5, reset_timeout=60)
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={
@@ -118,6 +120,14 @@ class PipefyClient:
     # ---------- chamada GraphQL base ----------
 
     async def _gql(
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Chamada GraphQL protegida por circuit breaker."""
+        return await self._breaker.call(
+            self._do_gql, query, variables
+        )
+
+    async def _do_gql(
         self, query: str, variables: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         started = time.perf_counter()
@@ -501,7 +511,8 @@ class PipefyClient:
         except Exception as e:
             logger.warning("Falha ao baixar anexo do card %s: %s", card.id, e)
             return None
-        valor = extrair_valor_total(conteudo)
+        # Usa versão async (thread pool) para não bloquear o event loop
+        valor = await extrair_valor_total_async(conteudo)
         card.valor_extraido_pdf = valor
         return valor
 

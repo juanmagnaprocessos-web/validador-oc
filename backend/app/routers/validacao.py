@@ -1,6 +1,7 @@
-"""Rotas de validação."""
+"""Rotas de validacao."""
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from app.services.auth import get_current_user
 from app.services.orchestrator import executar_validacao
 from app.services.report import gerar_excel, gerar_html
 
-router = APIRouter(tags=["validação"])
+router = APIRouter(tags=["validacao"])
+
+# Lock global: apenas uma validacao por vez
+_validacao_lock = asyncio.Lock()
 
 
 @router.post("/validar")
@@ -23,34 +27,38 @@ async def validar(
     dry_run: bool = Query(True),
     _: Usuario = Depends(get_current_user),
 ):
-    try:
-        data_d1 = date.fromisoformat(data)
-    except ValueError:
-        raise HTTPException(422, "data deve estar em YYYY-MM-DD")
+    if _validacao_lock.locked():
+        raise HTTPException(429, "Outra validacao ja esta em andamento")
 
-    validacao_id, resultados, ocs_orfas = await executar_validacao(
-        data_d1, dry_run=dry_run
-    )
-    html_path = gerar_html(data_d1, resultados, dry_run=dry_run, ocs_orfas=ocs_orfas)
-    xlsx_path = gerar_excel(data_d1, resultados, ocs_orfas=ocs_orfas)
+    async with _validacao_lock:
+        try:
+            data_d1 = date.fromisoformat(data)
+        except ValueError:
+            raise HTTPException(422, "data deve estar em YYYY-MM-DD")
 
-    def _count(status: StatusValidacao) -> int:
-        return sum(1 for r in resultados if r.status == status)
+        validacao_id, resultados, ocs_orfas = await executar_validacao(
+            data_d1, dry_run=dry_run
+        )
+        html_path = gerar_html(data_d1, resultados, dry_run=dry_run, ocs_orfas=ocs_orfas)
+        xlsx_path = gerar_excel(data_d1, resultados, ocs_orfas=ocs_orfas)
 
-    return {
-        "validacao_id": validacao_id,
-        "data_d1": data_d1.isoformat(),
-        "total": len(resultados),
-        "aprovadas": _count(StatusValidacao.APROVADA),
-        "divergentes": _count(StatusValidacao.DIVERGENCIA),
-        "bloqueadas": _count(StatusValidacao.BLOQUEADA),
-        "aguardando_ml": _count(StatusValidacao.AGUARDANDO_ML),
-        "ja_processadas": _count(StatusValidacao.JA_PROCESSADA),
-        "ocs_orfas": len(ocs_orfas),
-        "dry_run": dry_run,
-        "relatorio_html": str(html_path.name),
-        "relatorio_xlsx": str(xlsx_path.name),
-    }
+        def _count(status: StatusValidacao) -> int:
+            return sum(1 for r in resultados if r.status == status)
+
+        return {
+            "validacao_id": validacao_id,
+            "data_d1": data_d1.isoformat(),
+            "total": len(resultados),
+            "aprovadas": _count(StatusValidacao.APROVADA),
+            "divergentes": _count(StatusValidacao.DIVERGENCIA),
+            "bloqueadas": _count(StatusValidacao.BLOQUEADA),
+            "aguardando_ml": _count(StatusValidacao.AGUARDANDO_ML),
+            "ja_processadas": _count(StatusValidacao.JA_PROCESSADA),
+            "ocs_orfas": len(ocs_orfas),
+            "dry_run": dry_run,
+            "relatorio_html": str(html_path.name),
+            "relatorio_xlsx": str(xlsx_path.name),
+        }
 
 
 def _validar_data_iso(data: str) -> str:

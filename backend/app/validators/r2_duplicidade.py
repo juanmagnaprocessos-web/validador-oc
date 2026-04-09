@@ -16,20 +16,19 @@ from collections import defaultdict
 from app.config import settings
 from app.db import buscar_reincidencias, get_devolucoes_por_placa, get_devolucoes_por_oc
 from app.models import ContextoValidacao, Divergencia, Severidade
+from app.utils.chave_produto import chave_produto_de_obj
+from app.utils.historico_bulk import carregar_historico_bulk
 from app.utils.normalizacao_pecas import descricoes_similares, THRESHOLD_MATCH
 from app.validators.base import Regra
 
 
 def _chave_produto(p) -> str:
-    """Normaliza chave do produto para detectar duplicidade."""
-    ean = getattr(p, "ean", None)
-    if ean and str(ean).strip():
-        return f"ean:{str(ean).strip()}"
-    cod = getattr(p, "cod_interno", None)
-    if cod and str(cod).strip():
-        return f"cod:{str(cod).strip()}"
-    desc = getattr(p, "descricao", "") or ""
-    return f"desc:{desc.strip().lower()}"
+    """Normaliza chave do produto para detectar duplicidade.
+
+    Delega para a função canônica em utils.chave_produto para garantir
+    consistência com historico_produtos e orchestrator.
+    """
+    return chave_produto_de_obj(p)
 
 
 def _link_card_pipefy(card_id: str | None) -> str | None:
@@ -55,6 +54,7 @@ def detectar_reincidencias(
     fornecedor_id: str | None,
     produtos,
     data_d1,
+    _historico_bulk: dict[str, list] | None = None,
 ) -> list[Divergencia]:
     """Função utilitária stateless: dado um conjunto mínimo de dados de
     uma OC + sua lista de produtos, retorna a lista de Divergencias
@@ -67,6 +67,9 @@ def detectar_reincidencias(
       - off: nenhuma divergência
       - alerta: tudo INFO (aparece no relatório, NÃO bloqueia)
       - bloqueio: ALERTA leve / ALERTA forte / ERRO (bloqueia + move)
+
+    Otimização: se `_historico_bulk` for passado (dict chave->registros),
+    faz lookup O(1) em vez de query SQL por produto (elimina N+1).
     """
     if settings.r2_modo == "off" or not placa_normalizada:
         return []
@@ -74,6 +77,15 @@ def detectar_reincidencias(
     modo_bloqueio = settings.r2_modo == "bloqueio"
     sev_default = Severidade.ALERTA if modo_bloqueio else Severidade.INFO
     sev_suspeito = Severidade.ERRO if modo_bloqueio else Severidade.INFO
+
+    # Pré-carrega histórico em bulk (1 query) se não foi passado
+    if _historico_bulk is None:
+        _historico_bulk = carregar_historico_bulk(
+            placa_normalizada,
+            data_max=data_d1,
+            dias=settings.r2_janela_dias,
+            ignorar_id_pedido=id_pedido_atual,
+        )
 
     # Pré-carrega devoluções por placa como fallback (compatibilidade)
     devolucoes_placa = get_devolucoes_por_placa(placa_normalizada)
@@ -85,13 +97,8 @@ def detectar_reincidencias(
         chave = _chave_produto(p)
         if chave in ja_reportadas:
             continue
-        reincidencias = buscar_reincidencias(
-            placa_normalizada,
-            chave,
-            data_max=data_d1.isoformat(),
-            dias=settings.r2_janela_dias,
-            ignorar_id_pedido=id_pedido_atual,
-        )
+        # Lookup O(1) no dict pré-carregado em vez de query SQL
+        reincidencias = _historico_bulk.get(chave, [])
         if not reincidencias:
             continue
         ja_reportadas.add(chave)

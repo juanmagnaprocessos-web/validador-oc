@@ -8,8 +8,10 @@ O PDF é o anexo "Ordem de compra" dos cards do Pipefy. Estratégia:
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import re
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -130,3 +132,18 @@ def extrair_valor_total(source: bytes | str | Path) -> Decimal | None:
 
     logger.warning("Nenhum valor encontrado no PDF")
     return None
+
+
+# ---------- Versão assíncrona (thread pool) ----------
+
+_pdf_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pdf")
+
+
+async def extrair_valor_total_async(source: bytes | str | Path) -> Decimal | None:
+    """Versão assíncrona de `extrair_valor_total`.
+
+    pdfplumber é síncrono e bloqueia o event loop. Esta função delega
+    para um ThreadPoolExecutor dedicado (max 2 workers).
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_pdf_executor, extrair_valor_total, source)

@@ -242,17 +242,23 @@
 {% endmacro %}
 {# Modo deeplink: link clicável para verificação manual no Cilia. O Cilia
    não permite scraping (reCAPTCHA Enterprise), então o analista clica
-   no link, faz login no Cilia e busca a placa para confirmar peças. #}
+   no link, faz login no Cilia e busca a placa para confirmar peças.
+   O link abre direto na página de orçamentos e a placa é copiável com 1 clique. #}
 {% macro cell_cilia(placa) %}
   {% if cilia_mode == 'deeplink' %}
     {% set placa_busca = placa or '' %}
-    <a href="{{ cilia_base_url }}/users/sign_in" target="_blank" rel="noreferrer"
+    <a href="{{ cilia_base_url }}" target="_blank" rel="noreferrer"
+       title="Abrir Cilia — Orçamentos"
        style="color:#2563eb;font-size:12px;text-decoration:underline;font-weight:600;">
-      🔗 Verificar
+      🔗 Abrir Cilia
     </a>
     {% if placa_busca %}
-      <div style="font-size:10px;color:#5a6c7f;margin-top:2px;font-family:monospace;">
-        placa: {{ placa_busca }}
+      <div style="margin-top:3px;display:inline-flex;align-items:center;gap:4px;">
+        <code onclick="navigator.clipboard.writeText('{{ placa_busca }}');this.style.background='#d1fae5';this.title='Copiada!';setTimeout(()=>{this.style.background='#f1f5f9';this.title='Clique para copiar'},1200)"
+              title="Clique para copiar"
+              style="cursor:pointer;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:4px;padding:2px 6px;font-size:12px;font-weight:700;letter-spacing:1px;color:#1a2332;user-select:all;transition:background .2s">
+          {{ placa_busca }}
+        </code>
       </div>
     {% endif %}
   {% elif cilia_mode == 'off' %}

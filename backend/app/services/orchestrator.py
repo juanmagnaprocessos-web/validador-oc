@@ -22,6 +22,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from fastapi import HTTPException
+
 from app.clients.club_client import ClubClient
 from app.clients.cilia_client import CiliaClient, build_cilia_client
 from app.clients.pipefy_client import PipefyClient
@@ -59,6 +61,7 @@ from app.services.historico_produtos import (
     _chave_produto_dict,
     garantir_historico,
 )
+from app.utils.chave_produto import chave_produto_de_obj
 from app.validators import REGRAS_PADRAO, aplicar_regras
 from app.validators.r2_duplicidade import detectar_reincidencias
 
@@ -295,24 +298,15 @@ def _verificar_duplicidade_interna(produtos: list[ProdutoCotacao]) -> str:
     """Aplica a parte 1 da R2 (peças repetidas pela mesma chave) numa
     lista de produtos. Retorna 'Sim' / 'Não' / '—' (sem produtos).
 
-    Reusa a mesma lógica de chave usada em `r2_duplicidade._chave_produto`
-    (EAN > código interno > descrição normalizada). Não importamos a
-    função para evitar dependência circular do validators no orchestrator.
+    Usa a função canônica `chave_produto_de_obj` de utils.chave_produto
+    para garantir consistência com R2 e histórico.
     """
     if not produtos:
         return "—"
     from collections import defaultdict
     grupos: dict[str, int] = defaultdict(int)
     for p in produtos:
-        ean = (p.ean or "").strip()
-        cod = (p.cod_interno or "").strip()
-        desc = (p.descricao or "").strip().lower()
-        if ean:
-            chave = f"ean:{ean}"
-        elif cod:
-            chave = f"cod:{cod}"
-        else:
-            chave = f"desc:{desc}"
+        chave = chave_produto_de_obj(p)
         grupos[chave] += 1
     return "Sim" if any(c > 1 for c in grupos.values()) else "Não"
 
@@ -676,9 +670,32 @@ async def executar_validacao(
 
     Retorna (validacao_id, resultados, ocs_orfas).
     """
+    try:
+        async with asyncio.timeout(600):  # 10 minutos maximo
+            return await _executar_validacao_impl(data_d1, dry_run=dry_run, concorrencia=concorrencia)
+    except asyncio.TimeoutError:
+        logger.error("Timeout global na validacao de %s", data_d1)
+        raise HTTPException(504, "Validacao excedeu o tempo limite de 10 minutos")
+
+
+async def _executar_validacao_impl(
+    data_d1: date,
+    *,
+    dry_run: bool = True,
+    concorrencia: int = 5,
+) -> tuple[int, list[ResultadoValidacao], list[OcOrfa]]:
+    """Implementacao interna do pipeline (chamada por executar_validacao com timeout)."""
     init_db()
+
+    # Backup preventivo antes de operacoes criticas
+    from app.db import backup_db
+    try:
+        backup_db()
+    except Exception as e:
+        logger.warning("Falha ao criar backup preventivo: %s", e)
+
     logger.info(
-        "=== Início validação D-1=%s dry_run=%s ===", data_d1, dry_run
+        "=== Inicio validacao D-1=%s dry_run=%s ===", data_d1, dry_run
     )
 
     cilia = build_cilia_client()

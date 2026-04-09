@@ -37,6 +37,7 @@ from app.config import settings
 from app.db import registrar_chamada_api
 from app.logging_setup import get_logger
 from app.models import ItemCilia, OrcamentoCilia
+from app.utils.circuit_breaker import CircuitBreaker
 
 logger = get_logger(__name__)
 
@@ -203,6 +204,7 @@ class CiliaHTTPClient(CiliaClient):
                 "use CILIA_MODE=stub até preencher credenciais"
             )
 
+        self._breaker = CircuitBreaker("cilia", fail_threshold=5, reset_timeout=60)
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={
@@ -463,13 +465,21 @@ class CiliaHTTPClient(CiliaClient):
     async def _request(
         self, method: str, url: str, **kwargs: Any
     ) -> httpx.Response:
+        """Chamada HTTP protegida por circuit breaker."""
+        return await self._breaker.call(
+            self._do_request, method, url, **kwargs
+        )
+
+    async def _do_request(
+        self, method: str, url: str, **kwargs: Any
+    ) -> httpx.Response:
         """Faz uma chamada HTTP autenticada com retry + audit.
 
-        Detecta sessão expirada (302/HTML/401) e refaz o login uma vez.
+        Detecta sessao expirada (302/HTML/401) e refaz o login uma vez.
         """
         await self._garantir_autenticado()
 
-        async def _do_request() -> httpx.Response:
+        async def _do_request_inner() -> httpx.Response:
             await self._throttle()
             started = time.perf_counter()
             try:
@@ -484,10 +494,10 @@ class CiliaHTTPClient(CiliaClient):
             self._audit(method, url, resp.status_code, duracao)
             return resp
 
-        # 1ª tentativa
-        resp = await _do_request()
+        # 1a tentativa
+        resp = await _do_request_inner()
 
-        # Detecção de sessão expirada
+        # Deteccao de sessao expirada
         sessao_expirou = (
             resp.status_code in (302, 401)
             or (
@@ -507,7 +517,7 @@ class CiliaHTTPClient(CiliaClient):
             except Exception:
                 pass
             await self._autenticar()
-            resp = await _do_request()
+            resp = await _do_request_inner()
 
         if resp.status_code >= 400:
             raise CiliaError(

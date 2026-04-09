@@ -1,4 +1,4 @@
-import { HistoricoEntry } from "../api/client";
+import { COLORS, SHADOWS, RADIUS } from "../styles/theme";
 
 interface Props {
   total: number;
@@ -21,17 +21,18 @@ export function SummaryCards({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(6, 1fr)",
+        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
         gap: 12,
-        margin: "24px 0",
       }}
+      role="list"
+      aria-label="Resumo dos resultados"
     >
-      <Card label="Total OCs" value={total} color="#1a2332" />
-      <Card label="Aprovadas" value={aprovadas} color="#17a34a" />
-      <Card label="Divergências" value={divergentes} color="#ea580c" />
-      <Card label="Bloqueadas" value={bloqueadas} color="#dc2626" />
-      <Card label="Aguardando ML" value={aguardandoMl} color="#d97706" />
-      <Card label="Já processadas" value={jaProcessadas} color="#6b7280" />
+      <Card label="Total OCs" value={total} color={COLORS.text} />
+      <Card label="Aprovadas" value={aprovadas} color={COLORS.success} />
+      <Card label="Divergencias" value={divergentes} color={COLORS.warning} />
+      <Card label="Bloqueadas" value={bloqueadas} color={COLORS.danger} />
+      <Card label="Aguardando ML" value={aguardandoMl} color={COLORS.warningAmber} />
+      <Card label="Ja processadas" value={jaProcessadas} color={COLORS.textMuted} />
     </div>
   );
 }
@@ -47,19 +48,24 @@ function Card({
 }) {
   return (
     <div
+      role="listitem"
       style={{
-        background: "white",
-        borderRadius: 8,
-        padding: 14,
-        boxShadow: "0 1px 3px rgba(0,0,0,.06)",
+        background: COLORS.bgWhite,
+        borderRadius: RADIUS.md,
+        padding: 16,
+        boxShadow: SHADOWS.sm,
+        borderLeft: `3px solid ${color}`,
+        transition: "box-shadow 150ms ease",
       }}
+      aria-label={`${label}: ${value}`}
     >
       <div
         style={{
           fontSize: 11,
           textTransform: "uppercase",
           letterSpacing: 0.5,
-          color: "#5a6c7f",
+          color: COLORS.textSecondary,
+          fontWeight: 500,
         }}
       >
         {label}
@@ -69,8 +75,4 @@ function Card({
       </div>
     </div>
   );
-}
-
-export function resumirHistorico(entries: HistoricoEntry[]) {
-  return entries.slice(0, 1)[0];
 }

@@ -21,22 +21,18 @@ from app.db import (
 )
 from app.logging_setup import get_logger
 from app.models import OrdemCompra
+from app.utils.chave_produto import chave_produto_de_dict
 
 logger = get_logger(__name__)
 
 
 def _chave_produto_dict(p: dict[str, Any]) -> str:
-    """Mesma lógica de chave usada pela R2 (EAN > código > descrição)."""
-    ean = (p.get("ean") or "").strip() if isinstance(p.get("ean"), str) else ""
-    cod = (p.get("cod_interno") or "").strip() if isinstance(p.get("cod_interno"), str) else ""
-    desc = (p.get("descricao") or p.get("name") or "")
-    if not isinstance(desc, str):
-        desc = str(desc)
-    if ean:
-        return f"ean:{ean}"
-    if cod:
-        return f"cod:{cod}"
-    return f"desc:{desc.strip().lower()}"
+    """Mesma lógica de chave usada pela R2 (EAN > código > descrição).
+
+    Delega para a função canônica em utils.chave_produto.
+    Mantida como wrapper para compatibilidade com orchestrator.
+    """
+    return chave_produto_de_dict(p)
 
 
 def _item_para_chave_dict(item: dict[str, Any]) -> dict[str, Any]:
