@@ -22,10 +22,21 @@ _is_dev = settings.app_env == "development"
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
+async def _keep_alive():
+    """Ping periodico para evitar cold start no Render Free."""
+    import asyncio
+    while True:
+        await asyncio.sleep(600)  # 10 minutos
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    import asyncio
+    task = asyncio.create_task(_keep_alive()) if not _is_dev else None
     yield
+    if task:
+        task.cancel()
 
 
 app = FastAPI(

@@ -654,7 +654,7 @@ async def executar_validacao(
     data_d1: date,
     *,
     dry_run: bool = True,
-    concorrencia: int = 5,
+    concorrencia: int = 10,
 ) -> tuple[int, list[ResultadoValidacao], list[OcOrfa]]:
     """Executa o pipeline completo no novo fluxo INVERTIDO:
 
@@ -682,7 +682,7 @@ async def _executar_validacao_impl(
     data_d1: date,
     *,
     dry_run: bool = True,
-    concorrencia: int = 5,
+    concorrencia: int = 10,
 ) -> tuple[int, list[ResultadoValidacao], list[OcOrfa]]:
     """Implementacao interna do pipeline (chamada por executar_validacao com timeout)."""
     init_db()
