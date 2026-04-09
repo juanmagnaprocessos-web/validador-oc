@@ -46,58 +46,17 @@ def _item_para_chave_dict(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _coletar_dia(
-    club: ClubClient,
+def _extrair_linhas_de_pedidos(
+    pedidos: list[dict[str, Any]],
     dia: date,
-    semaforo: asyncio.Semaphore,
 ) -> list[dict[str, Any]]:
-    """Baixa os pedidos de um dia + os ITENS efetivamente comprados em
-    cada OC (via `get_order_details`) e retorna linhas prontas para
-    `registrar_historico_produtos`.
-
-    IMPORTANTE: usamos `get_order_details(id_pedido).items` em vez de
-    `get_produtos_cotacao(id_cotacao)`. A razão: várias OCs podem
-    compartilhar a MESMA cotação (split de pedido), e `getprodutoscotacao`
-    retorna a cotação INTEIRA — populando o histórico com cada produto
-    cotado N vezes (uma para cada OC), gerando falsos positivos enormes
-    de "reincidência". O `items` do `get_order_details` traz APENAS o
-    que foi efetivamente pedido naquela OC específica, alinhado com o
-    relatório `Club > Relatórios > Produtos` filtrado por placa.
-
-    Filtramos OCs com `status != "P"` (defensivo: hoje só vimos "P" no
-    listarpedidos, mas se aparecer "C"/cancelado, ignoramos).
-    """
-    try:
-        pedidos = await club.listar_pedidos(dia)
-    except Exception as e:
-        logger.warning("Falha ao listar pedidos de %s: %s", dia, e)
-        return []
-    if not pedidos:
-        return []
-
-    # Filtra canceladas / status não-aprovados
-    pedidos = [p for p in pedidos if (p.get("status") or "P") == "P"]
-
-    async def _items_de(raw: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        id_pedido = raw.get("id_pedido") or raw.get("id")
-        if not id_pedido:
-            return raw, []
-        async with semaforo:
-            try:
-                det = await club.get_order_details(id_pedido)
-            except Exception as e:
-                logger.debug(
-                    "Falha get_order_details OC %s: %s", id_pedido, e
-                )
-                return raw, []
-        return raw, det.get("items") or []
-
-    tarefas = [_items_de(p) for p in pedidos]
-    resultados = await asyncio.gather(*tarefas)
-
+    """Converte lista de pedidos (com items inline) em linhas para
+    `registrar_historico_produtos`. Funciona tanto com resposta v3
+    (já normalizada por _normalizar_pedido_v3) quanto v1+details."""
     linhas: list[dict[str, Any]] = []
     dia_iso = dia.isoformat()
-    for raw, items in resultados:
+    for raw in pedidos:
+        items = raw.get("items") or raw.get("itens") or []
         id_pedido = str(raw.get("id_pedido") or raw.get("id") or "").strip()
         if not id_pedido:
             continue
@@ -128,6 +87,80 @@ async def _coletar_dia(
                 "card_pipefy_id": None,
             })
     return linhas
+
+
+async def _coletar_dia(
+    club: ClubClient,
+    dia: date,
+    semaforo: asyncio.Semaphore,
+) -> list[dict[str, Any]]:
+    """Baixa os pedidos de um dia + seus ITENS e retorna linhas prontas
+    para `registrar_historico_produtos`.
+
+    Estratégia (v3 primeiro, v1 como fallback):
+      1. Tenta `listar_pedidos_v3(dia)` que retorna OCs COM items, seller
+         e buyer inline numa única chamada por página — elimina N chamadas
+         individuais a `get_order_details`.
+      2. Se v3 falhar, faz fallback para v1 (`listar_pedidos` + N×
+         `get_order_details`), comportamento idêntico ao anterior.
+
+    Filtramos OCs com `status != "P"` (defensivo: hoje só vimos "P" no
+    listarpedidos, mas se aparecer "C"/cancelado, ignoramos).
+    """
+    # ---- Tentativa v3 (batch com items inline) ----
+    try:
+        pedidos = await club.listar_pedidos_v3(dia)
+        if pedidos:
+            pedidos = [p for p in pedidos if (p.get("status") or "P") == "P"]
+            linhas = _extrair_linhas_de_pedidos(pedidos, dia)
+            logger.debug(
+                "Histórico %s: v3 retornou %d pedidos → %d linhas",
+                dia, len(pedidos), len(linhas),
+            )
+            return linhas
+    except Exception as e:
+        logger.warning(
+            "Falha ao usar v3 para listar pedidos de %s, "
+            "tentando fallback v1: %s", dia, e,
+        )
+
+    # ---- Fallback v1 (listar_pedidos + get_order_details por OC) ----
+    try:
+        pedidos = await club.listar_pedidos(dia)
+    except Exception as e:
+        logger.warning("Falha ao listar pedidos de %s (v1): %s", dia, e)
+        return []
+    if not pedidos:
+        return []
+
+    # Filtra canceladas / status não-aprovados
+    pedidos = [p for p in pedidos if (p.get("status") or "P") == "P"]
+
+    async def _items_de(raw: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        id_pedido = raw.get("id_pedido") or raw.get("id")
+        if not id_pedido:
+            return raw, []
+        async with semaforo:
+            try:
+                det = await club.get_order_details(id_pedido)
+            except Exception as e:
+                logger.debug(
+                    "Falha get_order_details OC %s: %s", id_pedido, e
+                )
+                return raw, []
+        return raw, det.get("items") or []
+
+    tarefas = [_items_de(p) for p in pedidos]
+    resultados = await asyncio.gather(*tarefas)
+
+    # Injeta items no raw para reutilizar _extrair_linhas_de_pedidos
+    pedidos_com_items = []
+    for raw, items in resultados:
+        raw_copy = dict(raw)
+        raw_copy["items"] = items
+        pedidos_com_items.append(raw_copy)
+
+    return _extrair_linhas_de_pedidos(pedidos_com_items, dia)
 
 
 async def garantir_historico(

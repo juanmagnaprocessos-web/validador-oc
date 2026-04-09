@@ -210,7 +210,7 @@ class ClubClient:
         *,
         page: int = 1,
     ) -> list[dict[str, Any]]:
-        """GET /api/listarpedidos?datainicial=D-1&datafinal=D-1&total=true"""
+        """GET /api/listarpedidos?datainicial=D-1&datafinal=D-1&total=true (v1 — fallback)"""
         url = f"{self._base_v1}/listarpedidos"
         params = {
             "page": page,
@@ -230,6 +230,155 @@ class ClubClient:
                     pedidos = v
                     break
         return pedidos or []
+
+    async def listar_pedidos_v3(
+        self,
+        data_inicio: date,
+        data_fim: date | None = None,
+        *,
+        products: bool = True,
+        seller: bool = True,
+        buyer: bool = True,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """GET /v3/api/clients/orders com paginação automática.
+
+        Retorna TODAS as OCs do período com items, fornecedor e comprador
+        inline (quando solicitados), eliminando chamadas individuais a
+        get_order_details.
+
+        A resposta v3 usa nomes em inglês:
+          - id, number_quote, identifier, value, generation_date, status
+          - items[].product.{id, name, ean, internal_code}
+          - items[].{quantity, unit_price, total_price}
+          - seller.{id, name, cnpj, status, excluded}
+          - buyer.{id, name, email}
+
+        Para compatibilidade com _parse_oc (orchestrator), cada pedido é
+        normalizado com aliases v1 (id_pedido, id_cotacao, fornecedor, etc.)
+        via _normalizar_pedido_v3.
+        """
+        if data_fim is None:
+            data_fim = data_inicio
+
+        url = f"{self._base_v3}/clients/orders"
+        todos: list[dict[str, Any]] = []
+        page = 1
+
+        while True:
+            params: dict[str, Any] = {
+                "from": data_inicio.strftime("%Y-%m-%d"),
+                "to": data_fim.strftime("%Y-%m-%d"),
+                "page": page,
+            }
+            if products:
+                params["products"] = 1
+            if seller:
+                params["seller"] = 1
+            if buyer:
+                params["buyer"] = 1
+            if status:
+                params["status"] = status
+
+            data = await self._request("GET", url, params=params)
+
+            # Extrair a lista de pedidos da resposta
+            pedidos: list[dict[str, Any]] = []
+            if isinstance(data, list):
+                pedidos = data
+            elif isinstance(data, dict):
+                # v3 pode retornar { "data": [...] } ou { "orders": [...] }
+                pedidos = (
+                    data.get("data")
+                    or data.get("orders")
+                    or data.get("pedidos")
+                    or []
+                )
+                if not pedidos and not isinstance(pedidos, list):
+                    # fallback: qualquer lista
+                    for v in data.values():
+                        if isinstance(v, list):
+                            pedidos = v
+                            break
+
+            if not pedidos:
+                break
+
+            # Normalizar cada pedido para compatibilidade com o restante do sistema
+            for p in pedidos:
+                todos.append(self._normalizar_pedido_v3(p))
+
+            # Se retornou menos que uma página cheia, acabou.
+            # Heurística: se a API retornar exatamente 0, paramos.
+            # Se não soubermos o tamanho da página, usamos 20 como padrão
+            # e paramos se vier menos.
+            page_size = 20
+            if isinstance(data, dict):
+                page_size = data.get("per_page") or data.get("limit") or 20
+            if len(pedidos) < page_size:
+                break
+
+            page += 1
+
+        logger.info(
+            "Club v3: %d OCs listadas de %s a %s (%d páginas)",
+            len(todos), data_inicio, data_fim, page,
+        )
+        return todos
+
+    @staticmethod
+    def _normalizar_pedido_v3(raw: dict[str, Any]) -> dict[str, Any]:
+        """Adiciona aliases v1 a um pedido retornado pela API v3 para que
+        _parse_oc (orchestrator) e _coletar_dia (historico) funcionem sem
+        alteração.
+
+        Os campos originais v3 são PRESERVADOS — apenas adicionamos
+        aliases quando o campo v1 correspondente não existe.
+        """
+        # --- IDs ---
+        if "id_pedido" not in raw and "id" in raw:
+            raw["id_pedido"] = raw["id"]
+        if "id_cotacao" not in raw and "number_quote" in raw:
+            raw["id_cotacao"] = raw["number_quote"]
+
+        # --- Identificador / placa ---
+        if "identificador" not in raw and "identifier" in raw:
+            raw["identificador"] = raw["identifier"]
+
+        # --- Valor ---
+        if "valor_pedido" not in raw and "value" in raw:
+            raw["valor_pedido"] = raw["value"]
+
+        # --- Data ---
+        if "data_pedido" not in raw and "generation_date" in raw:
+            raw["data_pedido"] = raw["generation_date"]
+
+        # --- Fornecedor (seller → fornecedor dict com for_id/for_nome) ---
+        seller = raw.get("seller") or {}
+        if seller and "fornecedor" not in raw:
+            raw["fornecedor"] = {
+                "for_id": seller.get("id"),
+                "for_nome": seller.get("name"),
+                "for_cnpj": seller.get("cnpj"),
+                "for_status": seller.get("status"),
+                "for_excluido": seller.get("excluded") or "0",
+            }
+            # for_id de nível raiz (usado por _parse_oc)
+            if "for_id" not in raw and seller.get("id"):
+                raw["for_id"] = seller["id"]
+
+        # --- Comprador (buyer) ---
+        buyer = raw.get("buyer") or {}
+        if buyer:
+            if "created_by" not in raw and buyer.get("id"):
+                raw["created_by"] = buyer["id"]
+            if "usu_nome" not in raw and buyer.get("name"):
+                raw["usu_nome"] = buyer["name"]
+
+        # --- Items já vêm no formato v3 (product.name, quantity, etc.) ---
+        # _parse_oc já sabe ler esse formato, nada a fazer.
+
+        return raw
 
     async def get_concorrentes(self, id_cotacao: str | int) -> list[dict[str, Any]]:
         """GET /api/getconcorrentescotacao?numerocotacao={id} — usado em R1."""

@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     )
 
     # --- R2 (peça repetida cruzada) ---
-    r2_janela_dias: int = Field(90, alias="R2_JANELA_DIAS")
+    r2_janela_dias: int = Field(210, alias="R2_JANELA_DIAS")
     # Modo da verificação cross-time:
     #   "alerta"   = só sinaliza no relatório (default seguro)
     #   "bloqueio" = gera Severidade.ERRO e move o card

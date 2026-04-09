@@ -6,7 +6,9 @@ ficam em `/auth/*` e exigem apenas autenticação.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.db import (
     atualizar_perfil,
@@ -214,3 +216,60 @@ async def admin_atualizar_perfil(
         permissoes=payload.permissoes,
     )
     return Perfil(**get_perfil(perfil_id))
+
+
+# ---- Backfill de histórico de produtos ----
+@admin_router.post("/backfill")
+async def backfill_historico(
+    dias: int = Query(210, ge=1, le=365, description="Janela de dias para backfill"),
+    user: Usuario = Depends(require_admin),
+):
+    """Popula o histórico de produtos (OCs) baixando dados do Club.
+
+    Usado na primeira execução ou para ampliar a janela de detecção de
+    duplicatas (R2 cross-time). Roda FORA do timeout da validação —
+    pode levar 15+ minutos para 210 dias na primeira vez.
+
+    Requer perfil Admin.
+    """
+    from app.clients.club_client import ClubClient
+    from app.db import dias_presentes_no_historico
+    from app.logging_setup import get_logger
+    from app.services.historico_produtos import garantir_historico
+
+    logger = get_logger(__name__)
+
+    data_d1 = date.today() - timedelta(days=1)
+    inicio = data_d1 - timedelta(days=dias)
+
+    # Info prévia: quantos dias já existem vs. total
+    presentes_antes = dias_presentes_no_historico(
+        inicio.isoformat(), data_d1.isoformat()
+    )
+    dias_faltantes = dias - len(presentes_antes)
+
+    logger.info(
+        "Backfill solicitado por %s: janela=%d dias, "
+        "presentes=%d, faltantes=%d",
+        user.username, dias, len(presentes_antes), dias_faltantes,
+    )
+
+    async with ClubClient() as club:
+        linhas_inseridas = await garantir_historico(
+            club, ate_dia=data_d1, dias_janela=dias,
+        )
+
+    # Contagem pós-backfill
+    presentes_depois = dias_presentes_no_historico(
+        inicio.isoformat(), data_d1.isoformat()
+    )
+
+    return {
+        "status": "ok",
+        "janela_dias": dias,
+        "periodo": f"{inicio.isoformat()} a {data_d1.isoformat()}",
+        "dias_presentes_antes": len(presentes_antes),
+        "dias_presentes_depois": len(presentes_depois),
+        "dias_baixados": len(presentes_depois) - len(presentes_antes),
+        "linhas_inseridas": linhas_inseridas,
+    }

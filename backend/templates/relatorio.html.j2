@@ -212,7 +212,7 @@
       {# --- Outras duplicidades históricas da placa (peças NÃO na OC atual) --- #}
       {% if duplicidades_placa %}
         <div style="margin-top:8px;padding:8px;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:4px;">
-          <strong style="color:#92400e;font-size:12px;">⚠ Outras duplicidades desta placa (90d):</strong>
+          <strong style="color:#92400e;font-size:12px;">⚠ Outras duplicidades desta placa (7m):</strong>
           <ul style="font-size:11px;margin:4px 0 0 0;padding-left:14px;">
             {% for dup in duplicidades_placa %}
               <li style="margin-bottom:6px;">
@@ -305,7 +305,7 @@
         {% if _show_valor_cilia %}<th class="right">Valor Cilia</th>{% endif %}
         <th class="right">Qtd Cotações</th>
         <th>Peça Duplicada</th>
-        <th>Reincidência (90d)</th>
+        <th>Reincidência (7m)</th>
         <th>Cancelamento</th>
         {% if cilia_mode != 'off' %}<th>Cília</th>{% endif %}
         <th>Status</th>
@@ -366,8 +366,8 @@
   </table>
 
   {% if ocs_orfas %}
-  <h2 style="margin-top:32px;font-size:18px;">OCs sem card no Pipefy ({{ ocs_orfas|length }})</h2>
-  <p style="color:#5a6c7f;font-size:13px;margin-top:0;">Pedidos do Club que não têm card correspondente no Pipefy. Pode indicar atraso na criação do card pelo comprador.</p>
+  <h2 style="margin-top:32px;font-size:18px;">Revisão final ({{ ocs_orfas|length }})</h2>
+  <p style="color:#5a6c7f;font-size:13px;margin-top:0;">OCs encontradas no Club sem card correspondente no Pipefy — requer revisão manual.</p>
   <table>
     <thead>
       <tr>
@@ -380,7 +380,7 @@
         <th class="right">Valor Club</th>
         <th>Qtd Itens</th>
         <th>Peça Duplicada</th>
-        <th>Reincidência (90d)</th>
+        <th>Reincidência (7m)</th>
         <th>Cancelamento</th>
         {% if cilia_mode != 'off' %}<th>Cília</th>{% endif %}
       </tr>

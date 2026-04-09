@@ -504,6 +504,10 @@ def listar_acoes_planejadas(
 
 def criar_perfil(nome: str, descricao: str | None = None, permissoes: list[str] | None = None) -> int:
     with get_conn() as conn:
+        # Se perfil ja existe, retorna o id existente
+        existing = conn.execute("SELECT id FROM perfis WHERE nome = ?", (nome,)).fetchone()
+        if existing:
+            return int(existing["id"])
         cur = conn.execute(
             "INSERT INTO perfis (nome, descricao, permissoes, criado_em) VALUES (?, ?, ?, ?)",
             (

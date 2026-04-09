@@ -107,7 +107,7 @@ def gerar_excel(
         "Qtd Cotações",
         "Qtd Produtos",
         "Peça Duplicada",
-        "Reincidência (90d)",
+        "Reincidência (7m)",
         "Detalhe Reincidência",
         "Cancelamento",
         "Link Cancelamento",
@@ -269,7 +269,7 @@ def gerar_excel(
 
     # ----- Aba 2: OCs órfãs (Club sem card no Pipefy) -----
     if ocs_orfas:
-        ws2 = wb.create_sheet("OCs sem card Pipefy")
+        ws2 = wb.create_sheet("Revisão final")
         orfa_headers = [
             "Nº Pedido",
             "Cotação",
@@ -281,7 +281,7 @@ def gerar_excel(
             "Data Pedido",
             "Qtd Itens",
             "Peça Duplicada",
-            "Reincidência (90d)",
+            "Reincidência (7m)",
             "Detalhe Reincidência",
             "Link Verificação",
             "Cancelamento",
