@@ -235,25 +235,23 @@ def _seed_usuarios(conn) -> None:
     """Cria perfil Admin e usuarios padrao se o banco estiver vazio."""
     row = conn.execute("SELECT COUNT(*) AS n FROM usuarios").fetchone()
     if row["n"] > 0:
-        return  # ja tem usuarios, nao fazer seed
-
-    # Garantir que perfil Admin existe
-    perfil_row = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()
-    if not perfil_row:
-        conn.execute(
-            "INSERT INTO perfis (nome, descricao, permissoes) VALUES (?, ?, ?)",
-            ("Admin", "Administrador com acesso total", '["*"]'),
-        )
+        return
 
     from app.services.auth import hash_senha
 
-    logger.info("Seed: criando perfil Admin e usuarios padrao")
-    conn.execute(
-        "INSERT INTO perfis (nome, descricao, permissoes) VALUES (?, ?, ?)",
-        ("Admin", "Administrador com acesso total", '["*"]'),
-    )
-    perfil_id = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()["id"]
     agora = datetime.now().isoformat(timespec="seconds")
+    logger.info("Seed: criando perfil Admin e usuarios padrao")
+
+    # Criar perfil Admin se nao existir
+    perfil_row = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()
+    if not perfil_row:
+        conn.execute(
+            "INSERT INTO perfis (nome, descricao, permissoes, criado_em) VALUES (?, ?, ?, ?)",
+            ("Admin", "Administrador com acesso total", '["*"]', agora),
+        )
+
+    perfil_id = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()["id"]
+
     for username, nome, senha in [
         ("admin", "Administrador", "admin123"),
         ("juanpablo", "Juan Pablo", "admin123"),
