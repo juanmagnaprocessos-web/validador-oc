@@ -233,9 +233,17 @@ _POST_MIGRATION_INDEXES = [
 
 def _seed_usuarios(conn) -> None:
     """Cria perfil Admin e usuarios padrao se o banco estiver vazio."""
-    row = conn.execute("SELECT COUNT(*) AS n FROM perfis").fetchone()
+    row = conn.execute("SELECT COUNT(*) AS n FROM usuarios").fetchone()
     if row["n"] > 0:
-        return  # ja tem dados, nao fazer seed
+        return  # ja tem usuarios, nao fazer seed
+
+    # Garantir que perfil Admin existe
+    perfil_row = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()
+    if not perfil_row:
+        conn.execute(
+            "INSERT INTO perfis (nome, descricao, permissoes) VALUES (?, ?, ?)",
+            ("Admin", "Administrador com acesso total", '["*"]'),
+        )
 
     from app.services.auth import hash_senha
 
