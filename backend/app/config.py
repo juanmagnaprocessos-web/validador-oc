@@ -137,13 +137,15 @@ class Settings(BaseSettings):
 
     @property
     def db_full_path(self) -> Path:
-        p = BASE_DIR / self.db_path
+        raw = Path(self.db_path)
+        p = raw if raw.is_absolute() else BASE_DIR / raw
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def relatorios_full_dir(self) -> Path:
-        p = BASE_DIR / self.relatorios_dir
+        raw = Path(self.relatorios_dir)
+        p = raw if raw.is_absolute() else BASE_DIR / raw
         p.mkdir(parents=True, exist_ok=True)
         return p
 

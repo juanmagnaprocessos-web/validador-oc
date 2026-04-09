@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: validador-oc
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: |
+      cd backend && pip install -r requirements.txt &&
+      cd ../frontend && npm install && npm run build
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: NODE_VERSION
+        value: "20"
+      - key: APP_ENV
+        value: production
+      - key: MODO_OPERACAO
+        value: consulta
+      - key: CILIA_MODE
+        value: deeplink
+      - key: EMAIL_ENABLED
+        value: "false"
+      - key: CLUB_LOGIN
+        sync: false
+      - key: CLUB_SENHA
+        sync: false
+      - key: PIPEFY_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+    disk:
+      name: validador-data
+      mountPath: /data
+      sizeGB: 1
