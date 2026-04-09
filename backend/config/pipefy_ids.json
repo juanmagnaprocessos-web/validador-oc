@@ -1,0 +1,310 @@
+{
+  "pipe_id": 305587531,
+  "pipe_name": "SINISTRO - LOGÍSTICA",
+  "phases": {
+    "Validação Ordem de Compra": {
+      "id": "333331499",
+      "fields": {
+        "Statement-1f27dbac-b399-434c-ab9c-193e9ac55e62": {
+          "id": "statement_1f27dbac_b399_434c_ab9c_193e9ac55e62",
+          "type": "statement",
+          "internal_id": "396596961"
+        },
+        "Peça duplicada?": {
+          "id": "pe_a_duplicada",
+          "type": "radio_vertical",
+          "internal_id": "396090576"
+        },
+        "Abatimento fornecedor?": {
+          "id": "abatimento_fornecedor",
+          "type": "radio_vertical",
+          "internal_id": "396090581"
+        },
+        "Validação da Oc concluída por:": {
+          "id": "valida_o_da_oc_conclu_da_por",
+          "type": "short_text",
+          "internal_id": "396090596"
+        },
+        "Validação concluída?": {
+          "id": "valida_o_conclu_da",
+          "type": "radio_vertical",
+          "internal_id": "396972132"
+        },
+        "Informe a negativa da validação": {
+          "id": "informe_a_negativa_da_valida_o",
+          "type": "long_text",
+          "internal_id": "398274975"
+        },
+        "Descrição das Peças": {
+          "id": "descri_o_das_pe_as",
+          "type": "long_text",
+          "internal_id": "402437361"
+        },
+        "Seleção de etiqueta": {
+          "id": "sele_o_de_etiqueta",
+          "type": "label_select",
+          "internal_id": "415721921"
+        }
+      }
+    },
+    "Programar Pagamento": {
+      "id": "333331500",
+      "fields": {
+        "Data da realização do pagamento": {
+          "id": "data_da_realiza_o_do_pagamento",
+          "type": "date",
+          "internal_id": "396090621"
+        },
+        "Comprovante de pagamento": {
+          "id": "comprovante_de_pagamento",
+          "type": "attachment",
+          "internal_id": "396090624"
+        },
+        "Pagamento realizado por:": {
+          "id": "pagamento_realizado_por",
+          "type": "long_text",
+          "internal_id": "398434431"
+        }
+      }
+    },
+    "Informações Incorretas": {
+      "id": "334019348",
+      "fields": {
+        "Statement-e00d1680-f619-43de-aa08-d3ed0d27774c": {
+          "id": "statement_e00d1680_f619_43de_aa08_d3ed0d27774c",
+          "type": "statement",
+          "internal_id": "399203496"
+        },
+        "Responsável": {
+          "id": "respons_vel",
+          "type": "assignee_select",
+          "internal_id": "399203571"
+        },
+        "Motivo Cancelamento": {
+          "id": "motivo_cancelamento",
+          "type": "long_text",
+          "internal_id": "413744891"
+        }
+      }
+    },
+    "Compra Mercado Livre": {
+      "id": "333342994",
+      "fields": {
+        "Previsão de entrega Mercado Livre": {
+          "id": "previs_o_de_entrega",
+          "type": "due_date",
+          "internal_id": "396090642"
+        },
+        "Palavra Chave": {
+          "id": "palavra_chave",
+          "type": "short_text",
+          "internal_id": "398548534"
+        },
+        "Código da compra": {
+          "id": "c_digo_da_compra",
+          "type": "short_text",
+          "internal_id": "398548536"
+        }
+      }
+    },
+    "Aguardando Entrega M.L": {
+      "id": "339416643",
+      "fields": {
+        "Data de Entrega na Oficina": {
+          "id": "data_de_entrega",
+          "type": "datetime",
+          "internal_id": "416046292"
+        },
+        "Observações": {
+          "id": "observa_es",
+          "type": "short_text",
+          "internal_id": "416046299"
+        }
+      }
+    },
+    "Aguardar Peças": {
+      "id": "333342995",
+      "fields": {
+        "Previsão da chegada da peça": {
+          "id": "previs_o_da_chegada_da_pe_a",
+          "type": "date",
+          "internal_id": "396090873"
+        },
+        "Data de recebimento do estoque ": {
+          "id": "data_de_recebimento_do_estoque",
+          "type": "datetime",
+          "internal_id": "396090924"
+        },
+        "Status estoque": {
+          "id": "status_estoque",
+          "type": "select",
+          "internal_id": "396090992"
+        },
+        "Cancelar Peça?": {
+          "id": "cancelar_pe_a",
+          "type": "radio_horizontal",
+          "internal_id": "411276842"
+        },
+        "Motivo do Cancelamento": {
+          "id": "motivo_do_cancelamento",
+          "type": "short_text",
+          "internal_id": "411276874"
+        }
+      }
+    },
+    "Aguardando Rota": {
+      "id": "333342996",
+      "fields": {
+        "Statement-226b1661-e78c-4798-b06d-2794184e3b33": {
+          "id": "statement_226b1661_e78c_4798_b06d_2794184e3b33",
+          "type": "statement",
+          "internal_id": "396091041"
+        },
+        "Data da previsão de envio das peças": {
+          "id": "data_da_previs_o_de_envio_das_pe_as",
+          "type": "date",
+          "internal_id": "396091026"
+        }
+      }
+    },
+    "Rota de Entrega": {
+      "id": "333342997",
+      "fields": {
+        "Responsável pela entrega": {
+          "id": "respons_vel_pela_entrega",
+          "type": "select",
+          "internal_id": "396091355"
+        },
+        "Data de saída do estoque": {
+          "id": "data_de_sa_da_do_estoque",
+          "type": "date",
+          "internal_id": "396091360"
+        },
+        "Data prevista de chegada ao local": {
+          "id": "data_prevista_de_chegada_ao_local",
+          "type": "due_date",
+          "internal_id": "396091371"
+        },
+        "Data da entrega na oficina": {
+          "id": "data_da_entrega_na_oficina",
+          "type": "date",
+          "internal_id": "396091449"
+        },
+        "Quem recebeu a peça?": {
+          "id": "quem_recebeu_a_pe_a",
+          "type": "short_text",
+          "internal_id": "416970816"
+        },
+        "CPF de quem recebeu a peça": {
+          "id": "cpf_de_quem_recebeu_a_pe_a",
+          "type": "number",
+          "internal_id": "416971111"
+        },
+        "Status - Rota de entrega": {
+          "id": "status_rota_de_entrega",
+          "type": "select",
+          "internal_id": "396091438"
+        },
+        "Nota Fiscal": {
+          "id": "nota_fiscal",
+          "type": "attachment",
+          "internal_id": "398131434"
+        }
+      }
+    },
+    "Aguardando Nota Fiscal": {
+      "id": "334266796",
+      "fields": {
+        "Nota Fiscal": {
+          "id": "nota_fiscal_1",
+          "type": "attachment",
+          "internal_id": "399080261"
+        }
+      }
+    },
+    "Conciliação Bancária": {
+      "id": "333342998",
+      "fields": {
+        "Conciliado?": {
+          "id": "conciliado",
+          "type": "radio_vertical",
+          "internal_id": "398774757"
+        }
+      }
+    },
+    "Concluído": {
+      "id": "333331501",
+      "fields": {
+        "Motivo da finalização": {
+          "id": "motivo_da_finaliza_o",
+          "type": "long_text",
+          "internal_id": "398543185"
+        }
+      }
+    },
+    "Cancelados": {
+      "id": "337982176",
+      "fields": {}
+    }
+  },
+  "fase_destino": {
+    "validacao": "333331499",
+    "aguardar_pecas": "333342995",
+    "programar_pagamento": "333331500",
+    "compras_ml": "333342994",
+    "informacoes_incorretas": "334019348",
+    "cancelados": "337982176"
+  },
+  "campos_validacao": {
+    "codigo_oc": {
+      "id": "c_digo_da_oc",
+      "label": "Código da Oc",
+      "type": "short_text"
+    },
+    "peca_duplicada": {
+      "id": "pe_a_duplicada",
+      "label": "Peça duplicada?",
+      "type": "radio_vertical"
+    },
+    "abatimento_fornecedor": {
+      "id": "abatimento_fornecedor",
+      "label": "Abatimento fornecedor?",
+      "type": "radio_vertical"
+    },
+    "validacao_concluida_por": {
+      "id": "valida_o_da_oc_conclu_da_por",
+      "label": "Validação da Oc concluída por:",
+      "type": "short_text"
+    },
+    "validacao_concluida": {
+      "id": "valida_o_conclu_da",
+      "label": "Validação concluída?",
+      "type": "radio_vertical"
+    },
+    "ordem_de_compra_pdf": {
+      "id": "ordem_de_compra",
+      "label": "Ordem de compra",
+      "type": "attachment"
+    },
+    "forma_de_entrega": {
+      "id": "forma_de_entrega",
+      "label": "Forma de entrega",
+      "type": "radio_vertical"
+    },
+    "fornecedor": {
+      "id": "fornecedor",
+      "label": "Fornecedor",
+      "type": "connector"
+    },
+    "justificativa_divergencia": {
+      "id": "informe_a_negativa_da_valida_o",
+      "label": "Informe a negativa da validação",
+      "type": "long_text"
+    },
+    "descricao_pecas": {
+      "id": "descri_o_das_pe_as",
+      "label": "Descrição das Peças",
+      "type": "long_text"
+    }
+  }
+}
