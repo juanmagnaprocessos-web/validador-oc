@@ -98,6 +98,20 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/setup-seed")
+async def force_seed():
+    """Endpoint temporario para forcar seed de usuarios no deploy."""
+    from app.db import get_conn, _seed_usuarios
+    with get_conn() as conn:
+        # Forcar seed mesmo se tabela existe mas esta vazia
+        row = conn.execute("SELECT COUNT(*) AS n FROM usuarios").fetchone()
+        if row["n"] > 0:
+            return {"status": "usuarios ja existem", "count": row["n"]}
+        _seed_usuarios(conn)
+        conn.commit()
+    return {"status": "seed executado com sucesso"}
+
+
 # --- Servir frontend estático em produção ---
 # Em dev, o Vite cuida disso. Em produção, o FastAPI serve o dist/.
 if _FRONTEND_DIST.is_dir():
