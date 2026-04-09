@@ -231,6 +231,34 @@ _POST_MIGRATION_INDEXES = [
 ]
 
 
+def _seed_usuarios(conn) -> None:
+    """Cria perfil Admin e usuarios padrao se o banco estiver vazio."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM perfis").fetchone()
+    if row["n"] > 0:
+        return  # ja tem dados, nao fazer seed
+
+    from app.services.auth import hash_senha
+
+    logger.info("Seed: criando perfil Admin e usuarios padrao")
+    conn.execute(
+        "INSERT INTO perfis (nome, descricao, permissoes) VALUES (?, ?, ?)",
+        ("Admin", "Administrador com acesso total", '["*"]'),
+    )
+    perfil_id = conn.execute("SELECT id FROM perfis WHERE nome='Admin'").fetchone()["id"]
+    agora = datetime.now().isoformat(timespec="seconds")
+    for username, nome, senha in [
+        ("admin", "Administrador", "admin123"),
+        ("juanpablo", "Juan Pablo", "admin123"),
+    ]:
+        conn.execute(
+            """INSERT INTO usuarios
+               (username, nome, email, senha_hash, perfil_id, ativo,
+                must_change_password, criado_em)
+               VALUES (?, ?, NULL, ?, ?, 1, 0, ?)""",
+            (username, nome, hash_senha(senha), perfil_id, agora),
+        )
+
+
 def init_db() -> None:
     """Cria tabelas se não existirem, aplica migrações e habilita WAL."""
     with get_conn() as conn:
@@ -241,6 +269,7 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=FULL;")
         conn.execute("PRAGMA wal_autocheckpoint=1000;")
+        _seed_usuarios(conn)
         conn.commit()
 
 
