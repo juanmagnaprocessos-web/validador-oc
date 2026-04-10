@@ -55,6 +55,7 @@ def detectar_reincidencias(
     produtos,
     data_d1,
     _historico_bulk: dict[str, list] | None = None,
+    _historico_pipefy_items: dict[str, list[dict]] | None = None,
 ) -> list[Divergencia]:
     """Função utilitária stateless: dado um conjunto mínimo de dados de
     uma OC + sua lista de produtos, retorna a lista de Divergencias
@@ -68,8 +69,12 @@ def detectar_reincidencias(
       - alerta: tudo INFO (aparece no relatório, NÃO bloqueia)
       - bloqueio: ALERTA leve / ALERTA forte / ERRO (bloqueia + move)
 
-    Otimização: se `_historico_bulk` for passado (dict chave->registros),
-    faz lookup O(1) em vez de query SQL por produto (elimina N+1).
+    Fonte do histórico (em ordem de prioridade):
+      1. `_historico_pipefy_items` — pré-carregado via Pipefy+Club (novo
+         fluxo, default em produção). Já vem filtrado pela placa e com a
+         OC atual excluída; apenas filtramos por chave_produto aqui.
+      2. `_historico_bulk` — pré-carregado via SQLite local (legado).
+      3. Query SQL ad-hoc (fallback).
     """
     if settings.r2_modo == "off" or not placa_normalizada:
         return []
@@ -78,8 +83,11 @@ def detectar_reincidencias(
     sev_default = Severidade.ALERTA if modo_bloqueio else Severidade.INFO
     sev_suspeito = Severidade.ERRO if modo_bloqueio else Severidade.INFO
 
-    # Pré-carrega histórico em bulk (1 query) se não foi passado
-    if _historico_bulk is None:
+    # Prioridade 1: histórico via Pipefy (novo fluxo)
+    if _historico_pipefy_items is not None:
+        _historico_bulk = _historico_pipefy_items
+    # Prioridade 2/3: histórico via SQLite (legado / fallback)
+    elif _historico_bulk is None:
         _historico_bulk = carregar_historico_bulk(
             placa_normalizada,
             data_max=data_d1,
@@ -321,4 +329,5 @@ class R2Duplicidade(Regra):
             fornecedor_id=str(forn_id) if forn_id else None,
             produtos=contexto.produtos_cotacao,
             data_d1=contexto.data_d1,
+            _historico_pipefy_items=contexto.historico_indexado,
         )

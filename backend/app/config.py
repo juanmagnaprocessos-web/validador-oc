@@ -115,6 +115,16 @@ class Settings(BaseSettings):
     r2_modo: Literal["alerta", "bloqueio", "off"] = Field(
         "alerta", alias="R2_MODO"
     )
+    # Fonte do historico para R2 cross-time:
+    #   "pipefy" = indexa cards do pipe principal + busca detalhes no Club
+    #              sob demanda (default — nao depende de backfill e funciona
+    #              em Render Free, que nao converge o backfill Club).
+    #   "sqlite" = usa tabela local `historico_produtos_oc` populada via
+    #              `garantir_historico` (legado — so funciona se o backfill
+    #              tiver rodado com time_budget suficiente).
+    r2_fonte_historico: Literal["pipefy", "sqlite"] = Field(
+        "pipefy", alias="R2_FONTE_HISTORICO"
+    )
     pipefy_fases_cancelamento: str = Field(
         "Cancelados,Informações Incorretas",
         alias="PIPEFY_FASES_CANCELAMENTO",

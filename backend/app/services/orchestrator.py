@@ -61,7 +61,7 @@ from app.services.historico_produtos import (
     _chave_produto_dict,
     garantir_historico,
 )
-from app.utils.chave_produto import chave_produto_de_obj
+from app.utils.chave_produto import chave_produto, chave_produto_de_obj
 from app.validators import REGRAS_PADRAO, aplicar_regras
 from app.validators.r2_duplicidade import detectar_reincidencias
 
@@ -412,6 +412,137 @@ def _oc_minima_para_card_orfao(card: CardPipefy) -> OrdemCompra:
     )
 
 
+async def _buscar_historico_placa_pipefy(
+    placa_normalizada: str,
+    indice_cards: dict[str, list[CardPipefy]],
+    club: ClubClient,
+    *,
+    data_max: date,
+    dias_max: int,
+    id_pedido_atual: str,
+    pipefy: PipefyClient,
+) -> list[dict[str, Any]]:
+    """Busca histórico da placa via Pipefy + Club (substitui o backfill
+    do Club para a R2 cross-time).
+
+    Fluxo:
+      1. Busca cards históricos da placa no índice pré-computado.
+      2. Exclui o card atual (a OC não pode se comparar consigo mesma).
+      3. Para cada card histórico, busca detalhes no Club (items).
+      4. Retorna lista de dicts no formato compatível com
+         `carregar_historico_bulk` (mesma shape que a tabela
+         `historico_produtos_oc`), para que `detectar_reincidencias`
+         possa indexar por `chave_produto`.
+
+    Performance: faz 1 chamada ao Club por card histórico (não há API
+    batch). Tipicamente 0-10 cards por placa na janela de 210 dias.
+    """
+    if not placa_normalizada:
+        return []
+
+    cards_historicos = await pipefy.buscar_cards_por_placa(
+        placa_normalizada,
+        indice=indice_cards,
+        dias_maximo=dias_max,
+    )
+
+    # Excluir cards sem codigo_oc (nao servem para buscar no Club) e
+    # excluir o card que representa a OC atual (nao comparar consigo mesma)
+    id_atual_norm = str(id_pedido_atual or "").strip()
+    cards_historicos = [
+        c for c in cards_historicos
+        if c.codigo_oc and c.codigo_oc.strip() and c.codigo_oc.strip() != id_atual_norm
+    ]
+
+    if not cards_historicos:
+        return []
+
+    async def _detalhes_do_card(card: CardPipefy) -> tuple[CardPipefy, dict[str, Any] | None]:
+        if not card.codigo_oc:
+            return card, None
+        try:
+            det = await club.get_order_details(card.codigo_oc)
+        except Exception as e:
+            logger.warning(
+                "Historico Pipefy: falha get_order_details OC %s (card %s): %s",
+                card.codigo_oc, card.id, e,
+            )
+            return card, None
+        return card, det
+
+    detalhes_por_card = await asyncio.gather(
+        *[_detalhes_do_card(c) for c in cards_historicos]
+    )
+
+    items_historicos: list[dict[str, Any]] = []
+    for card, det in detalhes_por_card:
+        if not det:
+            continue
+        # Filtro defensivo: ignora OCs canceladas. Se status ausente,
+        # assume que e valida (nao filtra).
+        status_oc = det.get("status")
+        if status_oc and status_oc != "P":
+            continue
+
+        forn = det.get("fornecedor") or {}
+        forn_id = str(
+            forn.get("for_id")
+            or det.get("for_id")
+            or ""
+        ) or None
+        forn_nome = forn.get("for_nome") or det.get("fornecedor_nome")
+
+        data_oc_iso = ""
+        if card.created_at:
+            try:
+                data_oc_iso = card.created_at.date().isoformat()
+            except Exception:
+                data_oc_iso = ""
+
+        for item in det.get("items") or []:
+            product = item.get("product") or {}
+            chave = chave_produto(
+                ean=product.get("ean"),
+                codigo=product.get("internal_code"),
+                descricao=product.get("name") or item.get("descricao"),
+            )
+            items_historicos.append({
+                "id_pedido": str(card.codigo_oc),
+                "id_cotacao": str(det.get("id_cotacao") or "") or None,
+                "data_oc": data_oc_iso,
+                "identificador": placa_normalizada,
+                "placa_normalizada": placa_normalizada,
+                "chave_produto": chave,
+                "descricao": product.get("name") or item.get("descricao"),
+                "fornecedor_id": forn_id,
+                "fornecedor_nome": forn_nome,
+                "quantidade": float(item.get("quantity") or 0),
+                "card_pipefy_id": card.id,
+            })
+
+    return items_historicos
+
+
+def _indexar_historico_por_chave(
+    items: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Transforma a lista de items do histórico Pipefy em um dict
+    chave_produto -> [registros], compatível com o retorno de
+    `carregar_historico_bulk` e com o parâmetro `_historico_bulk` de
+    `detectar_reincidencias`.
+
+    A ordenação (mais recente primeiro) é preservada porque a lista de
+    entrada já vem ordenada por `created_at` DESC do pipefy_client.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        chave = item.get("chave_produto")
+        if not chave:
+            continue
+        out.setdefault(chave, []).append(item)
+    return out
+
+
 async def _coletar_para_card(
     card: CardPipefy,
     raw_oc: dict[str, Any] | None,
@@ -712,25 +843,30 @@ async def _executar_validacao_impl(
             if id_pedido:
                 ocs_index[id_pedido] = raw
 
-        # 2. Listar cards de TODAS as fases relevantes (precisamos das
-        # fases destino para detectar cards já processados em ciclos
-        # anteriores e marcar como JA_PROCESSADA).
-        fases_para_scan = [
-            "validacao",
-            "aguardar_pecas",
-            "programar_pagamento",
-            "compras_ml",
-            "informacoes_incorretas",
-        ]
-        todos_cards: list[CardPipefy] = []
-        for fase_chave in fases_para_scan:
-            try:
-                cards_fase = await pipefy.listar_cards_fase(fase_chave)
-            except Exception as e:
-                logger.warning("Falha ao listar fase %s: %s", fase_chave, e)
-                continue
-            todos_cards.extend(cards_fase)
-        logger.info("Pipefy: %d cards lidos em %d fases", len(todos_cards), len(fases_para_scan))
+        # 2. Listar TODOS os cards do pipe principal (todas as fases
+        # historicas) UMA vez — isso substitui o backfill do Club para
+        # a R2 cross-time e serve ao mesmo tempo como base para filtrar
+        # cards do D-1 por `created_at`.
+        #
+        # Cobre: validacao, aguardar_pecas, programar_pagamento,
+        # compras_ml, informacoes_incorretas, cancelados (vide
+        # PipefyClient.FASES_HISTORICO_PRINCIPAL).
+        todos_cards: list[CardPipefy] = (
+            await pipefy.listar_todos_cards_pipe_principal()
+        )
+        logger.info(
+            "Pipefy: %d cards historicos lidos (pipe principal)",
+            len(todos_cards),
+        )
+
+        # 2b. Construir indice placa_normalizada -> [CardPipefy] UMA vez.
+        # Sera reusado por `_buscar_historico_placa_pipefy` para cada OC
+        # sendo validada, eliminando queries repetidas ao Pipefy.
+        indice_cards_historicos = pipefy.indexar_cards_por_placa(todos_cards)
+        logger.info(
+            "Pipefy: indice historico com %d placas distintas",
+            len(indice_cards_historicos),
+        )
 
         # 3. Filtrar cards: criados em D-1 (independente da fase atual).
         # O filtro de data se aplica ao `created_at` do card no Pipefy,
@@ -821,16 +957,21 @@ async def _executar_validacao_impl(
         )
 
         # 4d. R2 cross-time — preparar histórico e cache de devoluções
-        # antes de aplicar as regras. Backfill incremental: na 1ª execução
-        # leva alguns minutos; nas subsequentes só baixa o D-1 atual.
+        # antes de aplicar as regras.
         #
-        # IMPORTANTE: NÃO silenciamos exceções do `garantir_historico` com
-        # try/except genérico. Se o backfill levantar exceção por erro
-        # crítico (DB schema, network fatal, etc.), a validação DEVE
-        # falhar — silenciar aqui era a causa do bug em produção onde os
-        # alertas de duplicidade desapareciam sem qualquer sinal ao usuário.
+        # Fonte do histórico é controlada por `settings.r2_fonte_historico`:
+        #   - "pipefy" (default): historico vem do indice de cards do pipe
+        #                         principal + detalhes sob demanda no Club.
+        #                         NADA a preparar aqui — o helper
+        #                         `_buscar_historico_placa_pipefy` é chamado
+        #                         por OC dentro do loop mais abaixo.
+        #   - "sqlite" (legado):  backfill incremental via `garantir_historico`.
+        #
+        # IMPORTANTE (modo sqlite): NÃO silenciamos exceções do
+        # `garantir_historico`. Se o backfill falhar por erro crítico
+        # (DB schema, network fatal, etc.), a validação DEVE falhar.
         historico_status: dict | None = None
-        if settings.r2_modo != "off":
+        if settings.r2_modo != "off" and settings.r2_fonte_historico == "sqlite":
             # time_budget de 5min para o backfill dentro da validacao normal
             # (backfill longo deve usar o endpoint /api/admin/backfill)
             historico_status = await garantir_historico(
@@ -851,7 +992,15 @@ async def _executar_validacao_impl(
                     "Histórico completo: %d dias",
                     historico_status["dias_cobertos"],
                 )
+        elif settings.r2_modo != "off":
+            logger.info(
+                "R2 cross-time: fonte do historico = pipefy (indice com %d placas)",
+                len(indice_cards_historicos),
+            )
 
+        # Persistencia do D-1 no `historico_produtos_oc` — so faz sentido
+        # no modo sqlite (o modo pipefy nao le dessa tabela).
+        if settings.r2_modo != "off" and settings.r2_fonte_historico == "sqlite":
             # Persistir os produtos do D-1 atual no histórico (para que
             # execuções futuras já encontrem o D-1 de hoje como histórico)
             linhas_d1: list[dict[str, Any]] = []
@@ -917,6 +1066,9 @@ async def _executar_validacao_impl(
                     inseridas, len(linhas_d1),
                 )
 
+        # Caches de devolucoes/cancelamentos SEMPRE precisam rodar
+        # (ambos os modos dependem deles para enriquecer as divergencias).
+        if settings.r2_modo != "off":
             # Atualizar cache de devoluções a partir do pipe Devolução
             try:
                 devs = await pipefy.listar_devolucoes_abertas()
@@ -932,6 +1084,70 @@ async def _executar_validacao_impl(
             except Exception as e:
                 logger.error("Falha ao atualizar cache de cancelamentos: %s", e)
 
+        # 4d.1 — Pre-calcular o historico indexado via Pipefy PARA CADA
+        # placa que sera validada (cards do dia + orfãs). Carregamos a
+        # lista completa (sem excluir nenhum id_pedido) UMA vez por placa,
+        # e o filtro "exclui a OC atual" e aplicado depois, na hora de
+        # montar o contexto de cada OC individual.
+        historico_items_por_placa: dict[str, list[dict[str, Any]]] = {}
+        if (
+            settings.r2_modo != "off"
+            and settings.r2_fonte_historico == "pipefy"
+        ):
+            placas_unicas: set[str] = set()
+            for coleta in coletas:
+                if coleta.oc.placa_normalizada:
+                    placas_unicas.add(coleta.oc.placa_normalizada)
+            for oc, _comprador in orfas_raw:
+                if oc.placa_normalizada:
+                    placas_unicas.add(oc.placa_normalizada)
+
+            sem_hist = asyncio.Semaphore(concorrencia)
+
+            async def _carregar_placa(placa: str):
+                async with sem_hist:
+                    items = await _buscar_historico_placa_pipefy(
+                        placa,
+                        indice_cards_historicos,
+                        club,
+                        data_max=data_d1,
+                        dias_max=settings.r2_janela_dias,
+                        id_pedido_atual="",  # sem exclusao aqui — feita por OC
+                        pipefy=pipefy,
+                    )
+                return placa, items
+
+            resultados_hist = await asyncio.gather(
+                *[_carregar_placa(p) for p in placas_unicas]
+            )
+            for placa, items in resultados_hist:
+                historico_items_por_placa[placa] = items
+            logger.info(
+                "Historico Pipefy+Club pre-carregado para %d placas "
+                "(%d items totais)",
+                len(historico_items_por_placa),
+                sum(len(v) for v in historico_items_por_placa.values()),
+            )
+
+        def _historico_indexado_para_oc(
+            placa: str, id_pedido_atual: str
+        ) -> dict[str, list[dict[str, Any]]] | None:
+            """Monta o dict chave_produto -> [registros] para uma OC,
+            excluindo os items que pertencem a ela mesma. Retorna None
+            se o modo nao for pipefy (para que o fallback SQLite seja
+            usado por detectar_reincidencias)."""
+            if settings.r2_fonte_historico != "pipefy":
+                return None
+            items = historico_items_por_placa.get(placa, [])
+            if not items:
+                return {}
+            id_str = str(id_pedido_atual or "").strip()
+            filtrados = [
+                it for it in items
+                if str(it.get("id_pedido") or "").strip() != id_str
+            ]
+            return _indexar_historico_por_chave(filtrados)
+
         # 4e. Construir OcOrfas APLICANDO a R2 cross-time (agora que o
         # cache de devoluções e o histórico estão prontos). Para cards
         # com OC no Club, a R2 cross-time roda automaticamente dentro do
@@ -941,6 +1157,9 @@ async def _executar_validacao_impl(
         for (oc, comprador), produtos in zip(orfas_raw, produtos_por_orfa):
             peca_dup_interna = _verificar_duplicidade_interna(produtos)
             forn_id = oc.fornecedor.for_id if oc.fornecedor else None
+            hist_indexado_orfa = _historico_indexado_para_oc(
+                oc.placa_normalizada, oc.id_pedido
+            )
             divs_cross = detectar_reincidencias(
                 placa_normalizada=oc.placa_normalizada,
                 identificador=oc.identificador,
@@ -948,6 +1167,7 @@ async def _executar_validacao_impl(
                 fornecedor_id=str(forn_id) if forn_id else None,
                 produtos=produtos,
                 data_d1=data_d1,
+                _historico_pipefy_items=hist_indexado_orfa,
             )
             # Resumo de reincidência para a coluna do relatório
             reinc = _resumir_reincidencia_de_divs(divs_cross)
@@ -1008,6 +1228,9 @@ async def _executar_validacao_impl(
         # 4. Aplicar regras e construir resultados
         resultados: list[ResultadoValidacao] = []
         for coleta in coletas:
+            hist_indexado_card = _historico_indexado_para_oc(
+                coleta.oc.placa_normalizada, coleta.oc.id_pedido
+            )
             contexto = ContextoValidacao(
                 oc=coleta.oc,
                 concorrentes=coleta.concorrentes,
@@ -1015,6 +1238,7 @@ async def _executar_validacao_impl(
                 orcamento_cilia=coleta.orcamento_cilia,
                 card_pipefy=coleta.card_pipefy,
                 data_d1=data_d1,
+                historico_indexado=hist_indexado_card,
             )
             divergencias = aplicar_regras(REGRAS_PADRAO, contexto)
 

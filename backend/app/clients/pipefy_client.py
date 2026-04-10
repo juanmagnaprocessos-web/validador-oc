@@ -189,6 +189,14 @@ class PipefyClient:
     ) -> list[CardPipefy]:
         """Lista todos os cards da fase de validação."""
         phase_id = self._ids().fase_id(fase_chave)
+        return await self.listar_cards_por_phase_id(phase_id, max_cards=max_cards)
+
+    async def listar_cards_por_phase_id(
+        self, phase_id: str, *, max_cards: int = 500
+    ) -> list[CardPipefy]:
+        """Lista todos os cards de uma fase pelo ID direto (sem depender
+        de fase_destino). Usado para iterar sobre TODAS as fases do pipe
+        (incluindo Concluido, Rota, etc) no indice de historico."""
         cards: list[CardPipefy] = []
         after: str | None = None
 
@@ -206,10 +214,183 @@ class PipefyClient:
                 break
             after = page_info.get("endCursor")
 
-        logger.info(
-            "Pipefy: %d cards encontrados em fase %s", len(cards), fase_chave
+        logger.debug(
+            "Pipefy: %d cards encontrados em phase_id=%s", len(cards), phase_id
         )
         return cards
+
+    # ---------- busca historica por placa (R2 cross-time) ----------
+
+    async def listar_todos_cards_pipe_principal(
+        self,
+        *,
+        max_cards_por_fase: int = 1000,
+    ) -> list[CardPipefy]:
+        """Lista cards de TODAS as fases do pipe principal (historico
+        completo para R2 cross-time).
+
+        Itera sobre o dict `phases` em pipefy_ids.json que contem TODAS
+        as fases do pipe (incluindo Concluido, Rota de Entrega, etc —
+        onde ficam as OCs antigas). Cada fase e consultada pelo seu
+        ID direto, sem depender de `fase_destino` (que so mapeia as
+        fases de destino de atuacao).
+
+        Chamada UMA vez no inicio da validacao — o resultado e reusado
+        por `indexar_cards_por_placa` para responder a todas as buscas
+        de R2 cross-time sem fazer N * numero_de_fases chamadas.
+
+        Args:
+            max_cards_por_fase: limite de seguranca por fase.
+
+        Returns:
+            Lista consolidada de cards (deduplicada por id).
+        """
+        ids = self._ids()
+        todos: list[CardPipefy] = []
+        vistos: set[str] = set()
+        fases_consultadas = 0
+
+        # Iterar sobre TODAS as fases do pipe (dict phases do json)
+        for phase_name, phase_info in ids.phases.items():
+            phase_id = phase_info.get("id")
+            if not phase_id:
+                logger.warning(
+                    "Fase '%s' sem id em pipefy_ids.json — pulada", phase_name
+                )
+                continue
+            try:
+                cards_fase = await self.listar_cards_por_phase_id(
+                    phase_id, max_cards=max_cards_por_fase
+                )
+            except Exception as e:
+                logger.warning(
+                    "Falha ao listar fase '%s' (id=%s): %s",
+                    phase_name, phase_id, e,
+                )
+                continue
+            for c in cards_fase:
+                if c.id in vistos:
+                    continue
+                vistos.add(c.id)
+                todos.append(c)
+            fases_consultadas += 1
+            logger.debug(
+                "Pipefy historico: fase '%s' → %d cards (total=%d)",
+                phase_name, len(cards_fase), len(todos),
+            )
+
+        logger.info(
+            "Pipefy: %d cards historicos lidos em %d fases do pipe principal",
+            len(todos), fases_consultadas,
+        )
+        return todos
+
+    @staticmethod
+    def _normalizar_placa(placa: str) -> str:
+        """Normaliza placa removendo hifens, espacos e forcando upper."""
+        if not placa:
+            return ""
+        return placa.replace("-", "").replace(" ", "").upper().strip()
+
+    def indexar_cards_por_placa(
+        self, cards: list[CardPipefy]
+    ) -> dict[str, list[CardPipefy]]:
+        """Constroi indice placa_normalizada -> lista de cards.
+
+        No pipe principal, o `title` do card E a placa (normalizada sem
+        hifen, segundo as convencoes atuais). Aplica normalizacao
+        defensiva para cobrir cards antigos que possam ter hifen/espaco.
+
+        A lista para cada placa e ordenada por `created_at` DESC (mais
+        recente primeiro) para facilitar o consumo pelo R2 cross-time.
+        """
+        indice: dict[str, list[CardPipefy]] = {}
+        for c in cards:
+            placa_norm = self._normalizar_placa(c.title or "")
+            if not placa_norm:
+                continue
+            indice.setdefault(placa_norm, []).append(c)
+        # Ordenar cada bucket por created_at DESC (None vai para o fim)
+        _EPOCH = datetime.min
+        for placa_norm, lista in indice.items():
+            lista.sort(
+                key=lambda c: (c.created_at or _EPOCH),
+                reverse=True,
+            )
+        return indice
+
+    async def buscar_cards_por_placa(
+        self,
+        placa: str,
+        *,
+        indice: dict[str, list[CardPipefy]] | None = None,
+        max_cards: int = 200,
+        dias_maximo: int | None = 210,
+    ) -> list[CardPipefy]:
+        """Busca cards historicos do pipe principal para uma placa.
+
+        O pipe principal (305587531) NAO possui um campo customizado
+        dedicado para a placa — o `title` do card e a propria placa
+        normalizada. Como o `findCards` do Pipefy so aceita filtros
+        em campos customizados (nao em `title`), nao e possivel usar
+        essa query. A estrategia e:
+
+        1. Se um `indice` (dict placa_norm -> [CardPipefy]) for passado,
+           consultamos ele diretamente (O(1)) — este e o caso de uso
+           no R2 cross-time, onde o orchestrator chama
+           `listar_todos_cards_pipe_principal` + `indexar_cards_por_placa`
+           UMA vez no inicio e reusa para todas as OCs do dia.
+        2. Se `indice` nao for passado, fazemos o fluxo completo
+           (listar + indexar) aqui. Util para chamadas ad-hoc / testes,
+           mas caro: 1 chamada = N paginacoes de N fases.
+
+        Args:
+            placa: placa a buscar (com ou sem hifen).
+            indice: indice pre-computado (opcional, mas recomendado).
+            max_cards: limite maximo de cards retornados.
+            dias_maximo: descarta cards criados ha mais de X dias.
+                         None = sem filtro temporal. Default: 210.
+
+        Returns:
+            Lista de CardPipefy ordenada por created_at DESC.
+        """
+        if self.ids is None:
+            self.ids = PipefyIds.load()
+
+        placa_norm = self._normalizar_placa(placa)
+        if not placa_norm:
+            return []
+
+        if indice is None:
+            cards_all = await self.listar_todos_cards_pipe_principal()
+            indice = self.indexar_cards_por_placa(cards_all)
+
+        candidatos = list(indice.get(placa_norm, []))
+
+        # Filtro client-side por janela temporal (findCards nao suporta
+        # filtro por data, entao o fazemos em memoria).
+        if dias_maximo is not None and candidatos:
+            from datetime import timedelta, timezone
+            agora = datetime.now(timezone.utc)
+            limite = agora - timedelta(days=dias_maximo)
+            filtrados: list[CardPipefy] = []
+            for c in candidatos:
+                if c.created_at is None:
+                    # Sem data: incluir (conservador — nao sabemos se e antigo)
+                    filtrados.append(c)
+                    continue
+                ca = c.created_at
+                # Tornar timezone-aware se vier naive
+                if ca.tzinfo is None:
+                    ca = ca.replace(tzinfo=timezone.utc)
+                if ca >= limite:
+                    filtrados.append(c)
+            candidatos = filtrados
+
+        if len(candidatos) > max_cards:
+            candidatos = candidatos[:max_cards]
+
+        return candidatos
 
     GET_CARD_QUERY = """
     query($id: ID!) {

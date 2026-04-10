@@ -284,6 +284,13 @@ class ContextoValidacao(BaseModel):
     orcamento_cilia: OrcamentoCilia | None = None
     card_pipefy: CardPipefy | None = None
     data_d1: date
+    # Historico pre-carregado (Pipefy + Club) indexado por chave_produto.
+    # Quando presente, a R2 cross-time pula a query no SQLite local
+    # (`historico_produtos_oc`) e usa este dict — eliminando a dependencia
+    # do backfill do Club que nao converge em ambientes com memoria/tempo
+    # limitados (ex: Render Free). Formato: chave_produto -> lista de dicts
+    # compativeis com o retorno de `carregar_historico_bulk`.
+    historico_indexado: dict[str, list[dict[str, Any]]] | None = None
 
 
 class ResultadoValidacao(BaseModel):
