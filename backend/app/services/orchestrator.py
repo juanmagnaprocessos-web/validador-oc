@@ -483,7 +483,6 @@ async def _buscar_historico_placa_pipefy(
         # cancelamento e exatamente o que o R2 cross-time precisa sinalizar).
         # Quando havia o filtro `status != "P"`, historicos com mix de
         # status apareciam silenciosamente vazios.
-        status_oc = det.get("status")
 
         forn = det.get("fornecedor") or {}
         forn_id = str(
@@ -521,12 +520,6 @@ async def _buscar_historico_placa_pipefy(
                 "card_pipefy_id": card.id,
             })
 
-    if descartadas_por_status:
-        logger.info(
-            "R2 historico placa %s: %d OCs descartadas por status != 'P' "
-            "(revisar se devem contar como reincidencia)",
-            placa_normalizada, descartadas_por_status,
-        )
     return items_historicos
 
 
