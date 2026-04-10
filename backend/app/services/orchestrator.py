@@ -475,19 +475,15 @@ async def _buscar_historico_placa_pipefy(
     )
 
     items_historicos: list[dict[str, Any]] = []
-    descartadas_por_status = 0
     for card, det in detalhes_por_card:
         if not det:
             continue
-        # Filtro defensivo: ignora OCs canceladas. Se status ausente,
-        # assume que e valida (nao filtra).
-        # NOTA: esse filtro esvazia historico R2 quando ha mix de status.
-        # Se quiser incluir canceladas no historico de reincidencia, remover
-        # este bloco. Logamos a contagem para dar visibilidade do impacto.
+        # Nota: NAO filtrar por status da OC historica. OCs canceladas
+        # tambem devem contar como reincidencia (uma peca recomprada apos
+        # cancelamento e exatamente o que o R2 cross-time precisa sinalizar).
+        # Quando havia o filtro `status != "P"`, historicos com mix de
+        # status apareciam silenciosamente vazios.
         status_oc = det.get("status")
-        if status_oc and status_oc != "P":
-            descartadas_por_status += 1
-            continue
 
         forn = det.get("fornecedor") or {}
         forn_id = str(
@@ -845,14 +841,25 @@ async def _executar_validacao_impl(
     cilia = build_cilia_client()
 
     async with ClubClient() as club, PipefyClient(dry_run=dry_run) as pipefy:
-        # 1. Indexar OCs do Club do D-1 por id_pedido
+        # 1. Indexar OCs do Club do D-1 por id_pedido E por placa.
+        # O indice por placa e usado como FALLBACK em 4 (abaixo) quando
+        # um card do Pipefy tem codigo_oc vazio/invalido — sem esse
+        # fallback a OC vira uma entrada sintetica sem cotacao no
+        # dashboard e a mesma placa reaparece na Revisao Final com
+        # cotacao (bug observado com QQF2C69 em 2026-04-10).
         pedidos_raw = await club.listar_pedidos(data_d1)
         logger.info("Club: %d OCs encontradas em %s", len(pedidos_raw), data_d1)
         ocs_index: dict[str, dict[str, Any]] = {}
+        ocs_por_placa: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for raw in pedidos_raw:
             id_pedido = str(raw.get("id_pedido") or raw.get("id") or "").strip()
-            if id_pedido:
-                ocs_index[id_pedido] = raw
+            if not id_pedido:
+                continue
+            ocs_index[id_pedido] = raw
+            placa_raw = raw.get("identificador") or raw.get("identifier") or ""
+            placa_norm = PipefyClient._normalizar_placa(str(placa_raw))
+            if placa_norm:
+                ocs_por_placa.setdefault(placa_norm, []).append((id_pedido, raw))
 
         # 2. Listar TODOS os cards do pipe principal (todas as fases
         # historicas) UMA vez — isso substitui o backfill do Club para
@@ -900,10 +907,42 @@ async def _executar_validacao_impl(
         async def _com_sem(card: CardPipefy):
             async with semaforo:
                 raw = None
+                id_pedido_matched: str | None = None
+
+                # Tentativa 1: matching direto por codigo_oc do card
                 if card.codigo_oc:
-                    raw = ocs_index.get(card.codigo_oc.strip())
+                    codigo_norm = card.codigo_oc.strip()
+                    raw = ocs_index.get(codigo_norm)
                     if raw is not None:
-                        ids_pedido_consumidos.add(card.codigo_oc.strip())
+                        id_pedido_matched = codigo_norm
+
+                # Tentativa 2 (fallback): matching pela PLACA do card.
+                # Usado quando o card nao tem codigo_oc ou o codigo_oc
+                # nao bate com nenhuma OC do Club. Isso garante que a
+                # OC aparece UMA vez com dados completos (card + cotacao),
+                # em vez de virar uma OC sintetica sem cotacao no dashboard
+                # enquanto a OC real aparece duplicada na Revisao Final.
+                if raw is None:
+                    placa_card_norm = PipefyClient._normalizar_placa(
+                        card.title or ""
+                    )
+                    if placa_card_norm:
+                        candidatos = ocs_por_placa.get(placa_card_norm, [])
+                        for candidate_id, candidate_raw in candidatos:
+                            if candidate_id in ids_pedido_consumidos:
+                                continue
+                            raw = candidate_raw
+                            id_pedido_matched = candidate_id
+                            logger.info(
+                                "Fallback por placa: card %s (placa %s, "
+                                "codigo_oc=%r) matched com OC %s do Club",
+                                card.id, placa_card_norm,
+                                card.codigo_oc, candidate_id,
+                            )
+                            break
+
+                if id_pedido_matched:
+                    ids_pedido_consumidos.add(id_pedido_matched)
                 return await _coletar_para_card(card, raw, club, cilia, pipefy)
 
         coletas = await asyncio.gather(*[_com_sem(c) for c in cards_do_dia])
