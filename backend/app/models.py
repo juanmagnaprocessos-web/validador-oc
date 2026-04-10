@@ -105,7 +105,10 @@ class OrdemCompra(BaseModel):
     def placa_normalizada(self) -> str:
         if not self.identificador:
             return ""
-        return self.identificador.replace("-", "").upper().strip()
+        # Remove hifen E espacos para alinhar com PipefyClient._normalizar_placa.
+        # Sem essa paridade, lookups em indice_cards_historicos dao miss em placas
+        # vindas do Club com espaco, suprimindo alertas R2 cross-time.
+        return self.identificador.replace("-", "").replace(" ", "").upper().strip()
 
     @property
     def eh_mercado_livre(self) -> bool:

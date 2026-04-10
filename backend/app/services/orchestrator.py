@@ -475,13 +475,18 @@ async def _buscar_historico_placa_pipefy(
     )
 
     items_historicos: list[dict[str, Any]] = []
+    descartadas_por_status = 0
     for card, det in detalhes_por_card:
         if not det:
             continue
         # Filtro defensivo: ignora OCs canceladas. Se status ausente,
         # assume que e valida (nao filtra).
+        # NOTA: esse filtro esvazia historico R2 quando ha mix de status.
+        # Se quiser incluir canceladas no historico de reincidencia, remover
+        # este bloco. Logamos a contagem para dar visibilidade do impacto.
         status_oc = det.get("status")
         if status_oc and status_oc != "P":
+            descartadas_por_status += 1
             continue
 
         forn = det.get("fornecedor") or {}
@@ -520,6 +525,12 @@ async def _buscar_historico_placa_pipefy(
                 "card_pipefy_id": card.id,
             })
 
+    if descartadas_por_status:
+        logger.info(
+            "R2 historico placa %s: %d OCs descartadas por status != 'P' "
+            "(revisar se devem contar como reincidencia)",
+            placa_normalizada, descartadas_por_status,
+        )
     return items_historicos
 
 
@@ -910,11 +921,27 @@ async def _executar_validacao_impl(
         # rodar a verificação de peça duplicada (R2 parte 1) também nelas.
         # Buscamos `produtos_cotacao` por id_cotacao em paralelo para cada
         # órfã com semáforo, para não saturar o Club.
+        #
+        # Dedupe defensivo por placa: se uma placa ja tem card em `coletas`
+        # (inclusive card orfao com codigo_oc vazio, via _oc_minima_para_card_orfao),
+        # NAO pode aparecer tambem na lista de orfas. Sem isso, a mesma placa
+        # pode aparecer 2x no relatorio (dashboard com card sem cotacao +
+        # Revisao Final com cotacao) — bug observado com a placa QQF2C69.
+        placas_com_card: set[str] = {
+            c.oc.placa_normalizada for c in coletas if c.oc.placa_normalizada
+        }
         orfas_raw: list[tuple[OrdemCompra, str | None]] = []
         for id_pedido, raw in ocs_index.items():
             if id_pedido in ids_pedido_consumidos:
                 continue
             oc = _parse_oc(raw)
+            if oc.placa_normalizada and oc.placa_normalizada in placas_com_card:
+                logger.info(
+                    "Dedupe: OC %s (placa %s) ja tem card em resultados, "
+                    "nao adiciona a Revisao Final",
+                    oc.id_pedido, oc.placa_normalizada,
+                )
+                continue
             comprador = None
             if oc.created_by:
                 nome, _ = compradores_svc.resolve(oc.created_by)
