@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import init_db
@@ -17,9 +15,6 @@ setup_logging()
 
 # --- Docs condicionais: desabilitadas fora de development ---
 _is_dev = settings.app_env == "development"
-
-# --- Frontend estático (build do Vite) ---
-_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
 async def _keep_alive():
@@ -123,22 +118,3 @@ async def force_seed():
     return {"status": "seed executado com sucesso"}
 
 
-# --- Servir frontend estático em produção ---
-# Em dev, o Vite cuida disso. Em produção, o FastAPI serve o dist/.
-if _FRONTEND_DIST.is_dir():
-    # Assets (JS, CSS, imagens) — cache longo
-    app.mount(
-        "/assets",
-        StaticFiles(directory=_FRONTEND_DIST / "assets"),
-        name="assets",
-    )
-
-    # Qualquer outra rota não-API → retorna index.html (SPA fallback)
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        from fastapi.responses import FileResponse
-
-        file_path = _FRONTEND_DIST / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(_FRONTEND_DIST / "index.html")

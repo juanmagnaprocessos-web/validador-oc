@@ -655,7 +655,7 @@ async def executar_validacao(
     *,
     dry_run: bool = True,
     concorrencia: int = 10,
-) -> tuple[int, list[ResultadoValidacao], list[OcOrfa]]:
+) -> tuple[int, list[ResultadoValidacao], list[OcOrfa], dict | None]:
     """Executa o pipeline completo no novo fluxo INVERTIDO:
 
       1. Lista OCs do Club do D-1 → indexa por id_pedido
@@ -668,14 +668,16 @@ async def executar_validacao(
       6. OCs do Club que NÃO foram consumidas por nenhum card → lista
          paralela de `OcOrfa` no relatório
 
-    Retorna (validacao_id, resultados, ocs_orfas).
+    Retorna (validacao_id, resultados, ocs_orfas, historico_status).
+    `historico_status` é o dict retornado por `garantir_historico` (ou
+    None se `r2_modo == "off"`).
     """
     try:
-        async with asyncio.timeout(600):  # 10 minutos maximo
+        async with asyncio.timeout(900):  # 15 minutos maximo
             return await _executar_validacao_impl(data_d1, dry_run=dry_run, concorrencia=concorrencia)
     except asyncio.TimeoutError:
         logger.error("Timeout global na validacao de %s", data_d1)
-        raise HTTPException(504, "Validacao excedeu o tempo limite de 10 minutos")
+        raise HTTPException(504, "Validacao excedeu o tempo limite de 15 minutos")
 
 
 async def _executar_validacao_impl(
@@ -683,7 +685,7 @@ async def _executar_validacao_impl(
     *,
     dry_run: bool = True,
     concorrencia: int = 10,
-) -> tuple[int, list[ResultadoValidacao], list[OcOrfa]]:
+) -> tuple[int, list[ResultadoValidacao], list[OcOrfa], dict | None]:
     """Implementacao interna do pipeline (chamada por executar_validacao com timeout)."""
     init_db()
 
@@ -821,15 +823,34 @@ async def _executar_validacao_impl(
         # 4d. R2 cross-time — preparar histórico e cache de devoluções
         # antes de aplicar as regras. Backfill incremental: na 1ª execução
         # leva alguns minutos; nas subsequentes só baixa o D-1 atual.
+        #
+        # IMPORTANTE: NÃO silenciamos exceções do `garantir_historico` com
+        # try/except genérico. Se o backfill levantar exceção por erro
+        # crítico (DB schema, network fatal, etc.), a validação DEVE
+        # falhar — silenciar aqui era a causa do bug em produção onde os
+        # alertas de duplicidade desapareciam sem qualquer sinal ao usuário.
+        historico_status: dict | None = None
         if settings.r2_modo != "off":
-            try:
-                await garantir_historico(
-                    club,
-                    ate_dia=data_d1,
-                    dias_janela=settings.r2_janela_dias,
+            # time_budget de 5min para o backfill dentro da validacao normal
+            # (backfill longo deve usar o endpoint /api/admin/backfill)
+            historico_status = await garantir_historico(
+                club,
+                ate_dia=data_d1,
+                dias_janela=settings.r2_janela_dias,
+                time_budget_seconds=300.0,
+            )
+            if not historico_status["completo"]:
+                logger.warning(
+                    "HISTORICO INCOMPLETO: %d/%d dias cobertos. "
+                    "Alertas de duplicidade podem estar incompletos.",
+                    historico_status["dias_cobertos"],
+                    historico_status["dias_necessarios"],
                 )
-            except Exception as e:
-                logger.error("Falha no backfill de histórico: %s", e)
+            else:
+                logger.info(
+                    "Histórico completo: %d dias",
+                    historico_status["dias_cobertos"],
+                )
 
             # Persistir os produtos do D-1 atual no histórico (para que
             # execuções futuras já encontrem o D-1 de hoje como histórico)
@@ -1192,4 +1213,4 @@ async def _executar_validacao_impl(
         )
 
         await cilia.close()
-        return validacao_id, resultados, ocs_orfas
+        return validacao_id, resultados, ocs_orfas, historico_status

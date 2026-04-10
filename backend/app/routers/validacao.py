@@ -36,11 +36,17 @@ async def validar(
         except ValueError:
             raise HTTPException(422, "data deve estar em YYYY-MM-DD")
 
-        validacao_id, resultados, ocs_orfas = await executar_validacao(
+        validacao_id, resultados, ocs_orfas, historico_status = await executar_validacao(
             data_d1, dry_run=dry_run
         )
-        html_path = gerar_html(data_d1, resultados, dry_run=dry_run, ocs_orfas=ocs_orfas)
-        xlsx_path = gerar_excel(data_d1, resultados, ocs_orfas=ocs_orfas)
+        html_path = gerar_html(
+            data_d1, resultados, dry_run=dry_run,
+            ocs_orfas=ocs_orfas, historico_status=historico_status,
+        )
+        xlsx_path = gerar_excel(
+            data_d1, resultados, ocs_orfas=ocs_orfas,
+            historico_status=historico_status,
+        )
 
         def _count(status: StatusValidacao) -> int:
             return sum(1 for r in resultados if r.status == status)

@@ -48,6 +48,7 @@ def gerar_html(
     *,
     dry_run: bool,
     ocs_orfas: list[OcOrfa] | None = None,
+    historico_status: dict | None = None,
 ) -> Path:
     template = _jinja.get_template("relatorio.html.j2")
     total = len(resultados)
@@ -76,6 +77,7 @@ def gerar_html(
         link_card=_link_card,
         cilia_mode=settings.cilia_mode,
         cilia_base_url=settings.cilia_base_url,
+        historico_status=historico_status,
     )
 
     out = settings.relatorios_full_dir / f"{data_d1.isoformat()}_validacao.html"
@@ -88,10 +90,35 @@ def gerar_excel(
     resultados: list[ResultadoValidacao],
     *,
     ocs_orfas: list[OcOrfa] | None = None,
+    historico_status: dict | None = None,
 ) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = f"Validação {data_d1.isoformat()}"
+
+    # ----- Banner de histórico incompleto (linha 1, mesclada) -----
+    # Aparece como primeira linha (antes dos headers) quando o histórico
+    # está incompleto, sinalizando para o analista que os alertas de
+    # duplicidade podem estar parciais.
+    banner_row = 0
+    if historico_status and not historico_status.get("completo", True):
+        cobertos = historico_status.get("dias_cobertos", 0)
+        necessarios = historico_status.get("dias_necessarios", 0)
+        banner_text = (
+            f"⚠ HISTÓRICO DE DUPLICIDADES INCOMPLETO — "
+            f"{cobertos}/{necessarios} dias populados. "
+            f"Alertas de peças duplicadas podem estar incompletos. "
+            f"O sistema continuará baixando o histórico nas próximas execuções."
+        )
+        ws.append([banner_text])
+        banner_row = 1
+        banner_cell = ws.cell(row=1, column=1)
+        banner_cell.font = Font(bold=True, color="991B1B", size=12)
+        banner_cell.fill = PatternFill("solid", fgColor="FEE2E2")
+        banner_cell.alignment = Alignment(
+            horizontal="left", vertical="center", wrap_text=True
+        )
+        ws.row_dimensions[1].height = 32
 
     headers = [
         "Nº OC",
@@ -120,11 +147,20 @@ def gerar_excel(
         "Fase Pipefy Destino",
     ]
     ws.append(headers)
+    header_row_idx = banner_row + 1  # linha onde os headers foram inseridos
+    data_start_row = header_row_idx + 1
+
+    # Mescla a célula do banner acima de todos os headers
+    if banner_row:
+        ws.merge_cells(
+            start_row=1, start_column=1,
+            end_row=1, end_column=len(headers),
+        )
 
     header_fill = PatternFill("solid", fgColor="1A2332")
     header_font = Font(bold=True, color="FFFFFF")
     for col_idx, _ in enumerate(headers, start=1):
-        c = ws.cell(row=1, column=col_idx)
+        c = ws.cell(row=header_row_idx, column=col_idx)
         c.fill = header_fill
         c.font = header_font
         c.alignment = Alignment(horizontal="left", vertical="center")
@@ -162,7 +198,7 @@ def gerar_excel(
     }
     pipe_id_principal = settings.pipe_id
 
-    for row_idx, r in enumerate(resultados, start=2):
+    for row_idx, r in enumerate(resultados, start=data_start_row):
         forn = r.oc.fornecedor.for_nome if r.oc.fornecedor else ""
         motivo = r.motivo_resumido
         if r.status == StatusValidacao.AGUARDANDO_ML:
@@ -248,9 +284,10 @@ def gerar_excel(
             cell.value = f"🔗 {r.oc.identificador or r.oc.placa_normalizada}"
             cell.font = Font(color="0563C1", underline="single")
 
+    data_end_row = data_start_row + len(resultados)
     # Formato de moeda nas 4 colunas de valor (7=Card, 8=Club, 9=PDF, 10=Cilia)
     for col in (7, 8, 9, 10):
-        for row in range(2, len(resultados) + 2):
+        for row in range(data_start_row, data_end_row):
             ws.cell(row=row, column=col).number_format = "R$ #,##0.00"
 
     # Larguras automáticas
@@ -259,13 +296,14 @@ def gerar_excel(
             len(header),
             max(
                 (len(str(ws.cell(row=r, column=col_idx).value or ""))
-                 for r in range(2, len(resultados) + 2)),
+                 for r in range(data_start_row, data_end_row)),
                 default=0,
             ),
         )
         ws.column_dimensions[get_column_letter(col_idx)].width = min(largura + 2, 50)
 
-    ws.freeze_panes = "A2"
+    # Freeze abaixo da linha de headers (se tem banner, congela abaixo da linha 2)
+    ws.freeze_panes = f"A{data_start_row}"
 
     # ----- Aba 2: OCs órfãs (Club sem card no Pipefy) -----
     if ocs_orfas:

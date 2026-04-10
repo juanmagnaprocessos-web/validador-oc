@@ -11,6 +11,7 @@ A intenção é que a R2 cross-time consulte o histórico via SQL local
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -168,64 +169,147 @@ async def garantir_historico(
     *,
     ate_dia: date,
     dias_janela: int,
-    concorrencia: int = 5,
-) -> int:
+    concorrencia: int = 15,
+    time_budget_seconds: float = 480.0,
+) -> dict:
     """Garante que `historico_produtos_oc` cobre [ate_dia - dias_janela, ate_dia].
 
-    Verifica quais dias da janela já estão presentes no SQLite local e
-    baixa apenas os dias faltantes do Club. Retorna o número de linhas
-    inseridas (zero se nada faltava).
+    Processa os dias faltantes em CHUNKS de 30 dias (paralelos com
+    semáforo), respeitando um `time_budget_seconds` global — se o budget
+    estourar entre chunks, retorna status parcial em vez de continuar
+    indefinidamente. Isso garante que a validação principal não estoure
+    o timeout global por culpa do backfill.
 
-    Estratégia:
-      1. Calcula a lista de dias da janela
-      2. Consulta `dias_presentes_no_historico(...)` no SQLite
-      3. Para cada dia faltante, chama _coletar_dia em sequência (não
-         paralelo, para não estourar o rate limit do Club)
-      4. Cada dia internamente paraleliza as chamadas de produtos com
-         semáforo, então o ganho de paralelizar dias é pequeno e o risco
-         de bater rate limit é alto.
-      5. INSERT OR IGNORE garante idempotência se o usuário rodar de novo
+    Retorna um dict com o status do backfill:
 
-    Em caso de erro num dia específico, loga warning e continua — uma
-    falha parcial não trava a validação.
+    ```
+    {
+        "completo": bool,              # cobre a janela inteira?
+        "dias_cobertos": int,          # dias atualmente no histórico na janela
+        "dias_necessarios": int,       # = dias_janela
+        "dias_baixados_agora": int,    # quantos dias efetivamente foram baixados nesta execução
+        "chunks_processados": int,     # quantos chunks de 30 dias foram processados
+        "erro": str | None,            # mensagem de erro (se o loop parou por exceção)
+    }
+    ```
+
+    Notas:
+      - `INSERT OR IGNORE` garante idempotência se o usuário rodar de novo
+      - Erro num dia específico apenas loga warning (dentro de `_coletar_dia`);
+        erros catastróficos (ex: DB schema, connection) sobem como exceção.
     """
-    inicio = ate_dia - timedelta(days=dias_janela)
-    fim = ate_dia
+    inicio_ts = time.monotonic()
+    inicio_periodo = ate_dia - timedelta(days=dias_janela)
+    fim_periodo = ate_dia
+
+    def _contar_cobertos() -> int:
+        return len(
+            dias_presentes_no_historico(
+                inicio_periodo.isoformat(), fim_periodo.isoformat()
+            )
+        )
+
     todos_dias = [
-        (inicio + timedelta(days=i)).isoformat()
-        for i in range((fim - inicio).days + 1)
+        (inicio_periodo + timedelta(days=i)).isoformat()
+        for i in range((fim_periodo - inicio_periodo).days + 1)
     ]
-    presentes = dias_presentes_no_historico(inicio.isoformat(), fim.isoformat())
+    presentes = dias_presentes_no_historico(
+        inicio_periodo.isoformat(), fim_periodo.isoformat()
+    )
     faltantes = [d for d in todos_dias if d not in presentes]
+
+    dias_necessarios = len(todos_dias)
 
     if not faltantes:
         logger.info(
             "Histórico de produtos: já cobre %s a %s (%d dias presentes)",
-            inicio, fim, len(presentes),
+            inicio_periodo, fim_periodo, len(presentes),
         )
-        return 0
+        return {
+            "completo": True,
+            "dias_cobertos": len(presentes),
+            "dias_necessarios": dias_necessarios,
+            "dias_baixados_agora": 0,
+            "chunks_processados": 0,
+            "erro": None,
+        }
 
     logger.info(
         "Histórico de produtos: %d dias faltantes na janela %s a %s — "
-        "baixando do Club (pode demorar na 1ª execução)...",
-        len(faltantes), inicio, fim,
+        "baixando do Club em chunks de 30 dias (budget=%ds)...",
+        len(faltantes), inicio_periodo, fim_periodo, int(time_budget_seconds),
     )
 
     semaforo = asyncio.Semaphore(concorrencia)
-    total_inseridas = 0
-    for dia_iso in faltantes:
-        dia = date.fromisoformat(dia_iso)
-        linhas = await _coletar_dia(club, dia, semaforo)
-        if linhas:
-            inseridas = registrar_historico_produtos(linhas)
-            total_inseridas += inseridas
-            logger.debug(
-                "Histórico %s: %d linhas (de %d coletadas) inseridas",
-                dia_iso, inseridas, len(linhas),
+    chunk_size = 30
+    chunks = [
+        faltantes[i : i + chunk_size]
+        for i in range(0, len(faltantes), chunk_size)
+    ]
+
+    dias_baixados_agora = 0
+    chunks_processados = 0
+    erro: str | None = None
+
+    for idx, chunk in enumerate(chunks, start=1):
+        decorrido = time.monotonic() - inicio_ts
+        if decorrido > time_budget_seconds:
+            logger.warning(
+                "Histórico de produtos: time budget estourado "
+                "(%.0fs > %.0fs) após %d chunks — retornando status parcial.",
+                decorrido, time_budget_seconds, chunks_processados,
             )
+            break
+
+        logger.info(
+            "Histórico: processando chunk %d/%d (%d dias, decorrido=%.0fs)",
+            idx, len(chunks), len(chunk), decorrido,
+        )
+
+        async def _baixar_dia(dia_iso: str) -> int:
+            dia = date.fromisoformat(dia_iso)
+            linhas = await _coletar_dia(club, dia, semaforo)
+            if linhas:
+                return registrar_historico_produtos(linhas)
+            return 0
+
+        try:
+            resultados = await asyncio.gather(
+                *[_baixar_dia(d) for d in chunk],
+                return_exceptions=True,
+            )
+        except Exception as e:
+            # Catastrófico: erro fora do gather (ex: semaforo morto).
+            # Propaga para o orchestrator decidir se quebra a validação.
+            erro = f"Falha catastrófica no chunk {idx}: {e}"
+            logger.exception(erro)
+            break
+
+        for r in resultados:
+            if isinstance(r, Exception):
+                logger.warning("Histórico: dia falhou no chunk %d: %s", idx, r)
+                continue
+            if r > 0:
+                dias_baixados_agora += 1
+
+        chunks_processados += 1
+
+    dias_cobertos_final = _contar_cobertos()
+    completo = dias_cobertos_final >= dias_necessarios
 
     logger.info(
-        "Histórico de produtos: backfill concluído — %d linhas novas",
-        total_inseridas,
+        "Histórico de produtos: fim — cobertos=%d/%d, chunks=%d/%d, "
+        "dias_baixados=%d, completo=%s",
+        dias_cobertos_final, dias_necessarios,
+        chunks_processados, len(chunks),
+        dias_baixados_agora, completo,
     )
-    return total_inseridas
+
+    return {
+        "completo": completo,
+        "dias_cobertos": dias_cobertos_final,
+        "dias_necessarios": dias_necessarios,
+        "dias_baixados_agora": dias_baixados_agora,
+        "chunks_processados": chunks_processados,
+        "erro": erro,
+    }

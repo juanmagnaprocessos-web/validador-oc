@@ -255,8 +255,14 @@ async def backfill_historico(
     )
 
     async with ClubClient() as club:
-        linhas_inseridas = await garantir_historico(
-            club, ate_dia=data_d1, dias_janela=dias,
+        # Budget generoso: o endpoint /backfill é explicitamente o lugar
+        # onde o admin pode tomar o tempo necessário para popular a janela
+        # inteira (rodado fora do timeout da validação).
+        status_backfill = await garantir_historico(
+            club,
+            ate_dia=data_d1,
+            dias_janela=dias,
+            time_budget_seconds=60 * 30,  # 30 minutos
         )
 
     # Contagem pós-backfill
@@ -271,5 +277,42 @@ async def backfill_historico(
         "dias_presentes_antes": len(presentes_antes),
         "dias_presentes_depois": len(presentes_depois),
         "dias_baixados": len(presentes_depois) - len(presentes_antes),
-        "linhas_inseridas": linhas_inseridas,
+        "historico_status": status_backfill,
+    }
+
+
+@admin_router.get("/historico-status")
+async def historico_status(user: Usuario = Depends(require_admin)):
+    """Retorna o status atual do histórico de produtos (cobertura de dias).
+
+    Usado para diagnóstico rápido: quantos dias da janela R2 estão
+    populados, qual o primeiro e o último dia presentes. Se `completo`
+    for False, há risco de alertas de duplicidade incompletos.
+    """
+    from datetime import date, timedelta
+
+    from app.config import settings
+    from app.db import get_conn
+
+    data_max = date.today() - timedelta(days=1)
+    data_min = data_max - timedelta(days=settings.r2_janela_dias)
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT data_oc FROM historico_produtos_oc "
+            "WHERE data_oc BETWEEN ? AND ? ORDER BY data_oc",
+            (data_min.isoformat(), data_max.isoformat()),
+        ).fetchall()
+
+    dias_cobertos = len(rows)
+    primeiro = rows[0]["data_oc"] if rows else None
+    ultimo = rows[-1]["data_oc"] if rows else None
+
+    return {
+        "dias_cobertos": dias_cobertos,
+        "dias_necessarios": settings.r2_janela_dias,
+        "completo": dias_cobertos >= settings.r2_janela_dias,
+        "primeiro_dia_processado": primeiro,
+        "ultimo_dia_processado": ultimo,
+        "periodo_consultado": f"{data_min.isoformat()} a {data_max.isoformat()}",
     }

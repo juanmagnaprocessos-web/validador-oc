@@ -43,7 +43,7 @@ async def cmd_validar(args: argparse.Namespace) -> int:
     )
 
     try:
-        validacao_id, resultados, ocs_orfas = await executar_validacao(
+        validacao_id, resultados, ocs_orfas, historico_status = await executar_validacao(
             data_d1, dry_run=dry_run
         )
     except Exception as e:
@@ -51,8 +51,14 @@ async def cmd_validar(args: argparse.Namespace) -> int:
         raise
 
     # Relatórios
-    html_path = gerar_html(data_d1, resultados, dry_run=dry_run, ocs_orfas=ocs_orfas)
-    xlsx_path = gerar_excel(data_d1, resultados, ocs_orfas=ocs_orfas)
+    html_path = gerar_html(
+        data_d1, resultados, dry_run=dry_run,
+        ocs_orfas=ocs_orfas, historico_status=historico_status,
+    )
+    xlsx_path = gerar_excel(
+        data_d1, resultados, ocs_orfas=ocs_orfas,
+        historico_status=historico_status,
+    )
 
     # E-mails
     if args.email:

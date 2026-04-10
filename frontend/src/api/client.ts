@@ -3,7 +3,7 @@
 // Autenticação: HTTP Basic. As credenciais são guardadas no
 // sessionStorage e injetadas em todas as chamadas pelo `apiFetch`.
 
-const BASE = "/api";
+const BASE = import.meta.env.VITE_API_URL || "/api";
 const STORAGE_KEY = "validador.auth";
 
 export type StatusValidacao =
