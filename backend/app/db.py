@@ -153,6 +153,14 @@ CREATE INDEX IF NOT EXISTS idx_hist_placa_data
 CREATE INDEX IF NOT EXISTS idx_hist_data
     ON historico_produtos_oc(data_oc);
 
+-- Marca dias que ja foram consultados no Club (mesmo sem dados).
+-- Evita re-consultar dias vazios (fins de semana, feriados) a cada backfill.
+CREATE TABLE IF NOT EXISTS historico_dias_processados (
+    data_oc      TEXT    PRIMARY KEY,
+    tinha_dados  INTEGER NOT NULL DEFAULT 0,
+    processado_em TEXT   NOT NULL
+);
+
 -- Snapshot dos cards "em aberto" do pipe Devolução de Peças.
 -- Recriado a cada validação (TRUNCATE + INSERT). Indexado por placa
 -- normalizada (sem hífen) que é o campo "Placa" do start form lá.
@@ -810,6 +818,33 @@ def dias_presentes_no_historico(
             (data_inicio, data_fim),
         ).fetchall()
         return {r["data_oc"] for r in rows}
+
+
+def dias_ja_processados(data_inicio: str, data_fim: str) -> set[str]:
+    """Retorna o conjunto de datas ja processadas pelo backfill (mesmo
+    que tenham retornado 0 OCs). Usado para evitar re-consultar dias
+    vazios a cada backfill (fins de semana, feriados)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT data_oc FROM historico_dias_processados "
+            "WHERE data_oc BETWEEN ? AND ?",
+            (data_inicio, data_fim),
+        ).fetchall()
+        return {r["data_oc"] for r in rows}
+
+
+def marcar_dia_processado(data_oc: str, tinha_dados: bool) -> None:
+    """Marca um dia como ja consultado no backfill.
+    Se `tinha_dados=False`, o dia nao sera re-consultado em execucoes
+    futuras (otimizacao para dias vazios).
+    """
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO historico_dias_processados "
+            "(data_oc, tinha_dados, processado_em) VALUES (?, ?, ?)",
+            (data_oc, 1 if tinha_dados else 0, datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
 
 
 # ---------- R2 cross-time: cache de devoluções ----------

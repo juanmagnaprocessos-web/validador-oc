@@ -17,7 +17,9 @@ from typing import Any
 
 from app.clients.club_client import ClubClient
 from app.db import (
+    dias_ja_processados,
     dias_presentes_no_historico,
+    marcar_dia_processado,
     registrar_historico_produtos,
 )
 from app.logging_setup import get_logger
@@ -216,7 +218,12 @@ async def garantir_historico(
     presentes = dias_presentes_no_historico(
         inicio_periodo.isoformat(), fim_periodo.isoformat()
     )
-    faltantes = [d for d in todos_dias if d not in presentes]
+    # Dias ja processados (mesmo que vazios) nao precisam ser re-consultados
+    processados = dias_ja_processados(
+        inicio_periodo.isoformat(), fim_periodo.isoformat()
+    )
+    # Faltantes = dias que nao estao presentes E nao foram processados antes
+    faltantes = [d for d in todos_dias if d not in presentes and d not in processados]
 
     dias_necessarios = len(todos_dias)
 
@@ -270,7 +277,12 @@ async def garantir_historico(
             dia = date.fromisoformat(dia_iso)
             linhas = await _coletar_dia(club, dia, semaforo)
             if linhas:
-                return registrar_historico_produtos(linhas)
+                inseridas = registrar_historico_produtos(linhas)
+                # Marca como processado COM dados
+                marcar_dia_processado(dia_iso, tinha_dados=True)
+                return inseridas
+            # Marca como processado SEM dados (nao re-consulta)
+            marcar_dia_processado(dia_iso, tinha_dados=False)
             return 0
 
         try:
