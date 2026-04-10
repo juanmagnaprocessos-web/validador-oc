@@ -584,13 +584,31 @@ class PipefyClient:
     }
     """
 
+    # Nome das fases do pipe de devolucao que indicam que a devolucao
+    # foi REJEITADA ou CANCELADA — essas NAO justificam a recompra.
+    # Todas as outras fases (em andamento OU concluidas com sucesso)
+    # sao consideradas justificativa valida.
+    FASES_DEVOLUCAO_INVALIDAS: tuple[str, ...] = (
+        "Cancelado",
+    )
+
     async def listar_devolucoes_abertas(
         self,
         pipe_id: int | None = None,
         *,
         max_cards: int = 1000,
     ) -> list[dict[str, Any]]:
-        """Lista todos os cards `done=false` do pipe de Devolução de Peças.
+        """Lista cards do pipe de Devolução de Peças que justificam recompra.
+
+        IMPORTANTE: o nome da funcao ("abertas") e historico. Na verdade,
+        ela retorna TODOS os cards EXCETO os que estao em fase "Cancelado"
+        — isso inclui:
+          - Cards em andamento (Verificar Possibilidade, Providenciar Recolha, etc)
+          - Cards **Concluidos com sucesso** (devolucao finalizada)
+          - Cards **Peca Nao Localizada** (nao encontrada — precisa recomprar)
+
+        Apenas a fase "Cancelado" e excluida, pois representa uma devolucao
+        que foi rejeitada e portanto NAO justifica a recompra da peca.
 
         Retorna uma lista de dicts no formato esperado por
         `db.atualizar_cache_devolucoes`:
@@ -617,9 +635,12 @@ class PipefyClient:
             conn_data = data.get("cards") or {}
             for edge in conn_data.get("edges") or []:
                 node = edge.get("node") or {}
-                if node.get("done"):
-                    # `done=true` significa fase terminal (Concluído,
-                    # Não Localizada, Cancelado). Não nos interessa.
+                phase = node.get("current_phase") or {}
+                phase_name = phase.get("name") or ""
+                # Excluir APENAS fase "Cancelado" (devolucao rejeitada).
+                # Fases finalizadas com sucesso (Concluido, Peca Nao Localizada)
+                # SAO incluidas — sao prova de que a recompra e legitima.
+                if phase_name in self.FASES_DEVOLUCAO_INVALIDAS:
                     continue
                 placa_raw: str | None = None
                 n_oc: str | None = None
