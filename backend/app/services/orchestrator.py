@@ -458,14 +458,19 @@ async def _buscar_historico_placa_pipefy(
         return []
 
     async def _detalhes_do_card(card: CardPipefy) -> tuple[CardPipefy, dict[str, Any] | None]:
-        if not card.codigo_oc:
+        # `.strip()` e critico: ha cards no Pipefy com codigo_oc contendo
+        # espaco no comeco (ex: " 2040523"), provavelmente digitacao manual.
+        # Sem strip, a URL do Club vira /orders/ 2040523 e retorna 404,
+        # descartando silenciosamente o card do historico R2.
+        codigo = (card.codigo_oc or "").strip()
+        if not codigo:
             return card, None
         try:
-            det = await club.get_order_details(card.codigo_oc)
+            det = await club.get_order_details(codigo)
         except Exception as e:
             logger.warning(
                 "Historico Pipefy: falha get_order_details OC %s (card %s): %s",
-                card.codigo_oc, card.id, e,
+                codigo, card.id, e,
             )
             return card, None
         return card, det
@@ -892,53 +897,97 @@ async def _executar_validacao_impl(
             len(cards_do_dia), data_d1,
         )
 
-        # 4. Coleta paralela por CARD (com semáforo).
-        # Para cada card, busca a OC no índice por codigo_oc == id_pedido.
+        # 4. Matching card ↔ OC em 2 FASES SEQUENCIAIS.
+        #
+        # Antes, o matching direto (por codigo_oc) e o fallback (por placa)
+        # rodavam juntos dentro de asyncio.gather com `ids_pedido_consumidos`
+        # compartilhado — race condition: um card que precisa de fallback
+        # podia consumir uma OC antes do card que a reivindica pelo codigo_oc
+        # direto, "roubando" a OC e deixando a outra OC orfa.
+        #
+        # Agora:
+        #  Fase 1 (sincrona): processa todos os cards com codigo_oc VALIDO
+        #    no ocs_index E cuja placa bate com a da OC (protecao contra
+        #    cross-matching de placas). Marca ids como consumidos.
+        #  Fase 2 (sincrona): para cada card que sobrou, tenta fallback
+        #    por placa (ocs_por_placa), respeitando ids ja consumidos.
+        #  Fase 3 (paralela): roda `_coletar_para_card` em paralelo com
+        #    semaforo — agora seguro, porque raw ja esta resolvido.
         semaforo = asyncio.Semaphore(concorrencia)
         ids_pedido_consumidos: set[str] = set()
+        matches: list[tuple[CardPipefy, dict[str, Any] | None]] = []
 
-        async def _com_sem(card: CardPipefy):
-            async with semaforo:
-                raw = None
-                id_pedido_matched: str | None = None
-
-                # Tentativa 1: matching direto por codigo_oc do card
-                if card.codigo_oc:
-                    codigo_norm = card.codigo_oc.strip()
-                    raw = ocs_index.get(codigo_norm)
-                    if raw is not None:
-                        id_pedido_matched = codigo_norm
-
-                # Tentativa 2 (fallback): matching pela PLACA do card.
-                # Usado quando o card nao tem codigo_oc ou o codigo_oc
-                # nao bate com nenhuma OC do Club. Isso garante que a
-                # OC aparece UMA vez com dados completos (card + cotacao),
-                # em vez de virar uma OC sintetica sem cotacao no dashboard
-                # enquanto a OC real aparece duplicada na Revisao Final.
-                if raw is None:
+        # --- Fase 1: matching direto por codigo_oc (com validacao de placa)
+        cards_sem_match_direto: list[CardPipefy] = []
+        for card in cards_do_dia:
+            raw = None
+            id_matched: str | None = None
+            if card.codigo_oc:
+                codigo_norm = card.codigo_oc.strip()
+                candidate = ocs_index.get(codigo_norm)
+                if candidate is not None:
+                    # Validar que a placa da OC bate com a do card — protege
+                    # contra cards com codigo_oc apontando para OC de placa
+                    # errada (digitacao manual).
                     placa_card_norm = PipefyClient._normalizar_placa(
                         card.title or ""
                     )
-                    if placa_card_norm:
-                        candidatos = ocs_por_placa.get(placa_card_norm, [])
-                        for candidate_id, candidate_raw in candidatos:
-                            if candidate_id in ids_pedido_consumidos:
-                                continue
-                            raw = candidate_raw
-                            id_pedido_matched = candidate_id
-                            logger.info(
-                                "Fallback por placa: card %s (placa %s, "
-                                "codigo_oc=%r) matched com OC %s do Club",
-                                card.id, placa_card_norm,
-                                card.codigo_oc, candidate_id,
-                            )
-                            break
+                    placa_oc_raw = (
+                        candidate.get("identificador")
+                        or candidate.get("identifier")
+                        or ""
+                    )
+                    placa_oc_norm = PipefyClient._normalizar_placa(
+                        str(placa_oc_raw)
+                    )
+                    if (
+                        not placa_card_norm
+                        or not placa_oc_norm
+                        or placa_card_norm == placa_oc_norm
+                    ):
+                        raw = candidate
+                        id_matched = codigo_norm
+                    else:
+                        logger.warning(
+                            "Matching direto REJEITADO: card %s placa=%s "
+                            "aponta para OC %s placa=%s — caira em fallback",
+                            card.id, placa_card_norm,
+                            codigo_norm, placa_oc_norm,
+                        )
+            if raw is not None and id_matched is not None:
+                ids_pedido_consumidos.add(id_matched)
+                matches.append((card, raw))
+            else:
+                cards_sem_match_direto.append(card)
 
-                if id_pedido_matched:
-                    ids_pedido_consumidos.add(id_pedido_matched)
+        # --- Fase 2: fallback por placa para os cards restantes
+        for card in cards_sem_match_direto:
+            raw = None
+            placa_card_norm = PipefyClient._normalizar_placa(card.title or "")
+            if placa_card_norm:
+                candidatos = ocs_por_placa.get(placa_card_norm, [])
+                for candidate_id, candidate_raw in candidatos:
+                    if candidate_id in ids_pedido_consumidos:
+                        continue
+                    raw = candidate_raw
+                    ids_pedido_consumidos.add(candidate_id)
+                    logger.info(
+                        "Fallback por placa: card %s (placa %s, "
+                        "codigo_oc=%r) matched com OC %s do Club",
+                        card.id, placa_card_norm,
+                        card.codigo_oc, candidate_id,
+                    )
+                    break
+            matches.append((card, raw))
+
+        # --- Fase 3: coleta paralela (semaforo) com raws ja resolvidos
+        async def _coleta(card: CardPipefy, raw: dict[str, Any] | None):
+            async with semaforo:
                 return await _coletar_para_card(card, raw, club, cilia, pipefy)
 
-        coletas = await asyncio.gather(*[_com_sem(c) for c in cards_do_dia])
+        coletas = await asyncio.gather(
+            *[_coleta(c, r) for c, r in matches]
+        )
 
         # 4b. Resolver nome/email dos compradores
         compradores_svc.init_table()
