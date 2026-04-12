@@ -122,7 +122,7 @@ export const errorBox: React.CSSProperties = {
 };
 
 export const thStyle: React.CSSProperties = {
-  padding: "12px 10px",
+  padding: "14px 14px",
   textAlign: "left",
   fontSize: 11,
   textTransform: "uppercase",
@@ -131,7 +131,7 @@ export const thStyle: React.CSSProperties = {
 };
 
 export const tdStyle: React.CSSProperties = {
-  padding: "10px 12px",
+  padding: "12px 14px",
   fontSize: 13,
   verticalAlign: "middle",
 };

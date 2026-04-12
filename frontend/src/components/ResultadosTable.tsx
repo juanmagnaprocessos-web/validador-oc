@@ -39,6 +39,87 @@ function fmtMoney(v: number | null) {
 // ============================================================
 // Painel de detalhes expandido de uma OC
 // ============================================================
+function ActionGuidanceBanner({ r }: { r: OcResultado }) {
+  const divR2 = (r.divergencias_json ?? []).filter((d) => d.regra === "R2");
+  const hasReincNoReturn = divR2.some((d) => d.dados?.sem_devolucao && !d.dados?.tem_devolucao_peca && !d.dados?.tem_devolucao_outra_peca);
+  const hasReincWithReturn = divR2.length > 0 && divR2.every((d) => d.dados?.tem_devolucao_peca);
+  const lowQuotes = r.qtd_cotacoes != null && r.qtd_cotacoes < 3;
+
+  if (hasReincNoReturn) {
+    return (
+      <div style={{
+        padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
+        background: "#dc2626", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        display: "flex", alignItems: "center", gap: 10,
+        boxShadow: "0 2px 8px rgba(220,38,38,.3)",
+      }}>
+        <span style={{ fontSize: 22 }}>{"\u26d4"}</span>
+        <div>
+          <div>RECUSAR -- Sem card de devolucao no Pipefy</div>
+          <div style={{ fontSize: 12, fontWeight: 400, opacity: 0.9, marginTop: 2 }}>
+            Reincidencia detectada sem devolucao confirmada. Sinalizar ao comprador.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (hasReincWithReturn) {
+    return (
+      <div style={{
+        padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
+        background: "#17a34a", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        display: "flex", alignItems: "center", gap: 10,
+        boxShadow: "0 2px 8px rgba(23,163,74,.3)",
+      }}>
+        <span style={{ fontSize: 22 }}>{"\u2705"}</span>
+        <div>
+          <div>APROVAR -- Devolucao confirmada</div>
+          <div style={{ fontSize: 12, fontWeight: 400, opacity: 0.9, marginTop: 2 }}>
+            Todas as reincidencias possuem card de devolucao associado.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (!r.card_pipefy_id && !r.card_pipefy_link) {
+    return (
+      <div style={{
+        padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
+        background: "#7c3aed", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        display: "flex", alignItems: "center", gap: 10,
+        boxShadow: "0 2px 8px rgba(124,58,237,.3)",
+      }}>
+        <span style={{ fontSize: 22 }}>{"\ud83d\udccc"}</span>
+        <div>
+          <div>SEM CARD NO PIPEFY</div>
+          <div style={{ fontSize: 12, fontWeight: 400, opacity: 0.9, marginTop: 2 }}>
+            Esta OC nao possui card vinculado no Pipefy. Verificar se o card foi criado e associar manualmente.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (lowQuotes) {
+    return (
+      <div style={{
+        padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
+        background: "#ea580c", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        display: "flex", alignItems: "center", gap: 10,
+        boxShadow: "0 2px 8px rgba(234,88,12,.3)",
+      }}>
+        <span style={{ fontSize: 22 }}>{"\u26a0\ufe0f"}</span>
+        <div>
+          <div>ATENCAO -- Menos de 3 cotacoes</div>
+          <div style={{ fontSize: 12, fontWeight: 400, opacity: 0.9, marginTop: 2 }}>
+            Apenas {r.qtd_cotacoes} cotacao(oes) encontrada(s). Minimo exigido: 3.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 function DetalheOC({ r }: { r: OcResultado }) {
   const divergencias = r.divergencias_json ?? [];
   const produtos = r.produtos_json ?? [];
@@ -55,14 +136,18 @@ function DetalheOC({ r }: { r: OcResultado }) {
   return (
     <div
       style={{
-        padding: "16px 20px",
-        background: "#f8fafc",
-        borderTop: `2px solid ${COLORS.primary}`,
+        padding: "20px 24px",
+        background: "#eef1f6",
+        borderTop: `3px solid ${COLORS.primary}`,
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
-        gap: 16,
+        gap: 20,
       }}
     >
+      {/* Action guidance banner spans full width */}
+      <div style={{ gridColumn: "1 / -1" }}>
+        <ActionGuidanceBanner r={r} />
+      </div>
       {/* ---- COLUNA ESQUERDA: Informacoes Gerais + Pecas ---- */}
       <div>
         {/* Informacoes Gerais */}
@@ -79,8 +164,8 @@ function DetalheOC({ r }: { r: OcResultado }) {
         {/* Valores */}
         <SectionTitle>Valores</SectionTitle>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <ValueCard label="Club" value={fmtMoney(r.valor_club)} />
-          <ValueCard label="PDF" value={fmtMoney(r.valor_pdf)} />
+          <ValueCard label="Club" value={fmtMoney(r.valor_club)} highlight={r.valor_club != null && r.valor_pdf != null && r.valor_club !== r.valor_pdf} />
+          <ValueCard label="PDF" value={fmtMoney(r.valor_pdf)} highlight={r.valor_club != null && r.valor_pdf != null && r.valor_club !== r.valor_pdf} />
           <ValueCard label="Card Pipefy" value={fmtMoney(r.valor_card)} />
           <ValueCard label="Cilia" value={fmtMoney(r.valor_cilia)} />
         </div>
@@ -109,7 +194,14 @@ function DetalheOC({ r }: { r: OcResultado }) {
             </span>
           )}
         </SectionTitle>
-        {produtos.length > 0 ? (
+        {r.produtos_json === null ? (
+          <div style={{
+            padding: "14px 16px", background: "#fef3c7", border: "1px solid #fde68a",
+            borderRadius: RADIUS.sm, color: "#92400e", fontSize: 13, textAlign: "center",
+          }}>
+            Dados de pecas nao carregados -- execute nova validacao
+          </div>
+        ) : produtos.length > 0 ? (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#e2e8f0" }}>
@@ -129,7 +221,7 @@ function DetalheOC({ r }: { r: OcResultado }) {
                     key={i}
                     style={{
                       borderTop: "1px solid #cbd5e1",
-                      background: isReincidente ? "#fef2f2" : "transparent",
+                      background: isReincidente ? "#fef2f2" : i % 2 === 0 ? "#ffffff" : "#f8fafc",
                     }}
                   >
                     <td style={{ padding: "6px 4px", textAlign: "center" }}>
@@ -244,14 +336,14 @@ function SectionTitle({ children, color }: { children: React.ReactNode; color?: 
   return (
     <h4
       style={{
-        fontSize: 12,
+        fontSize: 13,
         textTransform: "uppercase",
         letterSpacing: 0.5,
         color: color ?? COLORS.textSecondary,
-        margin: "14px 0 6px",
-        fontWeight: 600,
-        borderBottom: `1px solid ${COLORS.borderLight}`,
-        paddingBottom: 4,
+        margin: "16px 0 8px",
+        fontWeight: 700,
+        borderBottom: `2px solid ${color ?? COLORS.borderLight}`,
+        paddingBottom: 6,
       }}
     >
       {children}
@@ -283,20 +375,20 @@ function InfoItem({ label, value, highlight }: { label: string; value: string; h
   );
 }
 
-function ValueCard({ label, value }: { label: string; value: string }) {
+function ValueCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div
       style={{
-        background: "#fff",
-        border: `1px solid ${COLORS.borderLight}`,
+        background: highlight ? "#fef2f2" : "#fff",
+        border: `1px solid ${highlight ? "#fca5a5" : COLORS.borderLight}`,
         borderRadius: RADIUS.sm,
-        padding: "6px 12px",
-        minWidth: 100,
+        padding: "8px 14px",
+        minWidth: 110,
         textAlign: "center",
       }}
     >
       <div style={{ fontSize: 10, color: COLORS.textMuted, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.text }}>{value}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: highlight ? COLORS.danger : COLORS.text }}>{value}</div>
     </div>
   );
 }
@@ -384,15 +476,24 @@ function ReincidenciaCard({ div: d }: { div: DivergenciaCompleta }) {
   const dados = d.dados;
   const sev = SEV_COLORS[d.severidade] ?? SEV_COLORS.info;
 
+  // Determine left border color based on status
+  const leftBorderColor = dados.tem_devolucao_peca
+    ? "#17a34a" // green - has return
+    : dados.tem_devolucao_outra_peca
+      ? "#ea580c" // orange - has return for another part
+      : "#dc2626"; // red - no return
+
   return (
     <div
       style={{
-        background: sev.bg,
-        border: `1px solid ${sev.fg}30`,
+        background: "#ffffff",
+        border: `1px solid ${COLORS.borderLight}`,
+        borderLeft: `4px solid ${leftBorderColor}`,
         borderRadius: RADIUS.sm,
-        padding: 12,
-        marginBottom: 8,
+        padding: 14,
+        marginBottom: 10,
         fontSize: 12,
+        boxShadow: "0 1px 3px rgba(0,0,0,.05)",
       }}
     >
       {/* Cabecalho */}
@@ -462,12 +563,14 @@ function DivergenciaCard({ div: d }: { div: DivergenciaCompleta }) {
   return (
     <div
       style={{
-        background: sev.bg,
-        border: `1px solid ${sev.fg}30`,
+        background: "#ffffff",
+        border: `1px solid ${COLORS.borderLight}`,
+        borderLeft: `4px solid ${sev.fg}`,
         borderRadius: RADIUS.sm,
-        padding: "8px 12px",
-        marginBottom: 6,
+        padding: "10px 14px",
+        marginBottom: 8,
         fontSize: 12,
+        boxShadow: "0 1px 3px rgba(0,0,0,.05)",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
@@ -731,7 +834,9 @@ export function ResultadosTable({ resultados }: Props) {
                           ? "#eef2ff"
                           : hasReincidencia && reincSemDev
                             ? "#fff5f5"
-                            : "transparent",
+                            : paged.indexOf(r) % 2 === 1
+                              ? "#f9fafb"
+                              : "#ffffff",
                         transition: "background 100ms ease",
                       }}
                       onMouseEnter={(e) => {
@@ -740,7 +845,11 @@ export function ResultadosTable({ resultados }: Props) {
                       onMouseLeave={(e) => {
                         if (!isExpanded) {
                           e.currentTarget.style.background =
-                            hasReincidencia && reincSemDev ? "#fff5f5" : "transparent";
+                            hasReincidencia && reincSemDev
+                              ? "#fff5f5"
+                              : paged.indexOf(r) % 2 === 1
+                                ? "#f9fafb"
+                                : "#ffffff";
                         }
                       }}
                     >
@@ -764,7 +873,20 @@ export function ResultadosTable({ resultados }: Props) {
                         {(r.fornecedor ?? "").slice(0, 25)}
                       </td>
                       <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(r.valor_club)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(r.valor_pdf)}</td>
+                      <td style={{
+                        ...tdStyle,
+                        textAlign: "right",
+                        ...(r.valor_club != null && r.valor_pdf != null && r.valor_club !== r.valor_pdf
+                          ? { color: COLORS.danger, fontWeight: 700 }
+                          : {}),
+                      }}>
+                        {fmtMoney(r.valor_pdf)}
+                        {r.valor_club != null && r.valor_pdf != null && r.valor_club !== r.valor_pdf && (
+                          <div style={{ fontSize: 10, color: COLORS.danger, fontWeight: 400 }}>
+                            {"\u2260"} Club: {fmtMoney(r.valor_club)}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ ...tdStyle, textAlign: "right" }}>
                         <span style={{ color: r.qtd_cotacoes != null && r.qtd_cotacoes < 3 ? COLORS.danger : COLORS.text, fontWeight: r.qtd_cotacoes != null && r.qtd_cotacoes < 3 ? 700 : 400 }}>
                           {r.qtd_cotacoes ?? 0}
@@ -775,9 +897,9 @@ export function ResultadosTable({ resultados }: Props) {
                           style={{
                             background: st.bg,
                             color: st.fg,
-                            padding: "3px 8px",
+                            padding: "4px 10px",
                             borderRadius: 4,
-                            fontSize: 11,
+                            fontSize: 12,
                             fontWeight: 600,
                             whiteSpace: "nowrap",
                           }}
@@ -789,16 +911,26 @@ export function ResultadosTable({ resultados }: Props) {
                         {hasReincidencia ? (
                           <span
                             style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
                               background: reincSemDev ? COLORS.errorBg : COLORS.warningBg,
                               color: reincColor,
-                              padding: "3px 8px",
+                              padding: "4px 12px",
                               borderRadius: 4,
-                              fontSize: 11,
-                              fontWeight: 600,
+                              fontSize: 12,
+                              fontWeight: 700,
                               whiteSpace: "nowrap",
+                              minWidth: 110,
+                              justifyContent: "center",
+                              borderLeft: `3px solid ${reincSemDev ? COLORS.danger : COLORS.warning}`,
                             }}
                           >
                             {reincLabel}
+                            {(() => {
+                              const reincCount = (r.divergencias_json ?? []).filter((d) => d.regra === "R2").length;
+                              return reincCount > 1 ? ` (${reincCount})` : "";
+                            })()}
                           </span>
                         ) : (
                           <span style={{ color: COLORS.textMuted, fontSize: 12 }}>{"\u2014"}</span>
@@ -816,7 +948,16 @@ export function ResultadosTable({ resultados }: Props) {
                             Abrir
                           </a>
                         ) : (
-                          <span style={{ color: COLORS.textMuted, fontSize: 11 }}>--</span>
+                          <span style={{
+                            color: "#7c3aed",
+                            fontSize: 10,
+                            fontWeight: 700,
+                            background: "#ede9fe",
+                            padding: "2px 6px",
+                            borderRadius: 3,
+                          }}>
+                            SEM CARD
+                          </span>
                         )}
                       </td>
                       <td style={{ ...tdStyle, color: "#b91c1c", fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

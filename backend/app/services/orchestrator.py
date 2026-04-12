@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -506,11 +506,15 @@ async def _buscar_historico_placa_pipefy(
 
         for item in det.get("items") or []:
             product = item.get("product") or {}
+            desc_raw = product.get("name") or item.get("descricao") or ""
             chave = chave_produto(
                 ean=product.get("ean"),
                 codigo=product.get("internal_code"),
-                descricao=product.get("name") or item.get("descricao"),
+                descricao=desc_raw,
             )
+            # Normalized description for secondary indexing fallback —
+            # even if EAN/code is inconsistent, description matching works.
+            desc_normalizada = desc_raw.strip().lower() if desc_raw else ""
             items_historicos.append({
                 "id_pedido": str(card.codigo_oc),
                 "id_cotacao": str(det.get("id_cotacao") or "") or None,
@@ -518,7 +522,8 @@ async def _buscar_historico_placa_pipefy(
                 "identificador": placa_normalizada,
                 "placa_normalizada": placa_normalizada,
                 "chave_produto": chave,
-                "descricao": product.get("name") or item.get("descricao"),
+                "descricao": desc_raw,
+                "descricao_normalizada": desc_normalizada,
                 "fornecedor_id": forn_id,
                 "fornecedor_nome": forn_nome,
                 "quantidade": float(item.get("quantity") or 0),
@@ -528,16 +533,101 @@ async def _buscar_historico_placa_pipefy(
     return items_historicos
 
 
+def _buscar_historico_placa_club(
+    placa_normalizada: str,
+    todos_pedidos_historicos: dict[str, list[dict[str, Any]]],
+    *,
+    id_pedido_atual: str,
+) -> list[dict[str, Any]]:
+    """Busca historico da placa diretamente nos pedidos pre-fetched do Club API.
+
+    Complementa `_buscar_historico_placa_pipefy` — muitos cards antigos no
+    Pipefy nao possuem `codigo_oc` preenchido, fazendo com que a fonte
+    Pipefy perca OCs historicas. O Club API, por outro lado, SEMPRE tem
+    todas as OCs por data.
+
+    Parametros:
+      placa_normalizada: placa normalizada (sem hifen, upper).
+      todos_pedidos_historicos: dict pre-construido de
+          placa_normalizada -> list[pedido_v3_normalizado], contendo TODOS
+          os pedidos do Club na janela historica (excluindo D-1).
+      id_pedido_atual: id_pedido da OC sendo validada (para exclusao).
+
+    Retorna items no mesmo formato que `_buscar_historico_placa_pipefy`.
+    """
+    if not placa_normalizada:
+        return []
+
+    pedidos = todos_pedidos_historicos.get(placa_normalizada, [])
+    if not pedidos:
+        return []
+
+    id_atual_norm = str(id_pedido_atual or "").strip()
+    items_historicos: list[dict[str, Any]] = []
+
+    for pedido in pedidos:
+        id_pedido = str(pedido.get("id_pedido") or pedido.get("id") or "").strip()
+        if id_pedido == id_atual_norm:
+            continue
+
+        forn_raw = pedido.get("fornecedor") or {}
+        forn_id = str(
+            forn_raw.get("for_id")
+            or pedido.get("for_id")
+            or ""
+        ) or None
+        forn_nome = forn_raw.get("for_nome") or pedido.get("fornecedor_nome")
+
+        data_oc_raw = pedido.get("data_pedido") or pedido.get("generation_date") or ""
+        data_oc_iso = ""
+        if data_oc_raw:
+            parsed = _parse_data(data_oc_raw)
+            if parsed:
+                data_oc_iso = parsed.isoformat()
+
+        for item in pedido.get("items") or []:
+            product = item.get("product") or {}
+            desc_raw = product.get("name") or item.get("descricao") or ""
+            chave = chave_produto(
+                ean=product.get("ean"),
+                codigo=product.get("internal_code"),
+                descricao=desc_raw,
+            )
+            desc_normalizada = desc_raw.strip().lower() if desc_raw else ""
+            items_historicos.append({
+                "id_pedido": id_pedido,
+                "id_cotacao": str(pedido.get("id_cotacao") or "") or None,
+                "data_oc": data_oc_iso,
+                "identificador": placa_normalizada,
+                "placa_normalizada": placa_normalizada,
+                "chave_produto": chave,
+                "descricao": desc_raw,
+                "descricao_normalizada": desc_normalizada,
+                "fornecedor_id": forn_id,
+                "fornecedor_nome": forn_nome,
+                "quantidade": float(item.get("quantity") or item.get("quantidade") or 0),
+                "card_pipefy_id": None,  # Club source — no Pipefy card
+            })
+
+    return items_historicos
+
+
 def _indexar_historico_por_chave(
     items: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Transforma a lista de items do histórico Pipefy em um dict
+    """Transforma a lista de items do histórico Pipefy/Club em um dict
     chave_produto -> [registros], compatível com o retorno de
     `carregar_historico_bulk` e com o parâmetro `_historico_bulk` de
     `detectar_reincidencias`.
 
     A ordenação (mais recente primeiro) é preservada porque a lista de
     entrada já vem ordenada por `created_at` DESC do pipefy_client.
+
+    SECONDARY INDEXING: além da chave primária (ean:X / cod:X / desc:X),
+    cada item é TAMBÉM indexado sob "desc:<descricao_normalizada>" quando a
+    chave primária não é baseada em descrição. Isso permite matching por
+    descrição como fallback — útil quando EAN/código é inconsistente entre
+    fontes (ex: Pipefy vs Club vs Cilia).
     """
     out: dict[str, list[dict[str, Any]]] = {}
     for item in items:
@@ -545,6 +635,18 @@ def _indexar_historico_por_chave(
         if not chave:
             continue
         out.setdefault(chave, []).append(item)
+
+        # Secondary index by normalized description when primary key
+        # is NOT already desc-based (avoid double-indexing)
+        if not chave.startswith("desc:"):
+            desc_norm = item.get("descricao_normalizada") or ""
+            if not desc_norm:
+                # Fallback: compute from raw description
+                desc_raw = item.get("descricao") or ""
+                desc_norm = desc_raw.strip().lower() if desc_raw else ""
+            if desc_norm:
+                chave_desc = f"desc:{desc_norm}"
+                out.setdefault(chave_desc, []).append(item)
     return out
 
 
@@ -1198,6 +1300,54 @@ async def _executar_validacao_impl(
         # e o filtro "exclui a OC atual" e aplicado depois, na hora de
         # montar o contexto de cada OC individual.
         historico_items_por_placa: dict[str, list[dict[str, Any]]] = {}
+
+        # COMPLEMENTARY SOURCE: fetch ALL historical OCs from the Club API
+        # for the R2 window period. Many old Pipefy cards lack `codigo_oc`,
+        # so the Pipefy-only source misses them. The Club API always has
+        # every OC by date, making it the authoritative complement.
+        club_historico_por_placa: dict[str, list[dict[str, Any]]] = {}
+        if (
+            settings.r2_modo != "off"
+            and settings.r2_fonte_historico == "pipefy"
+        ):
+            janela_inicio = data_d1 - timedelta(days=settings.r2_janela_dias)
+            janela_fim = data_d1 - timedelta(days=1)
+            try:
+                pedidos_historicos_club = await club.listar_pedidos_v3(
+                    janela_inicio,
+                    janela_fim,
+                    products=True,
+                    seller=True,
+                )
+                logger.info(
+                    "Club v3: %d OCs historicas carregadas de %s a %s "
+                    "para complemento R2",
+                    len(pedidos_historicos_club), janela_inicio, janela_fim,
+                )
+                # Index by placa_normalizada
+                for pedido in pedidos_historicos_club:
+                    placa_raw = (
+                        pedido.get("identificador")
+                        or pedido.get("identifier")
+                        or ""
+                    )
+                    placa_norm = (
+                        str(placa_raw)
+                        .replace("-", "")
+                        .replace(" ", "")
+                        .upper()
+                        .strip()
+                    )
+                    if placa_norm:
+                        club_historico_por_placa.setdefault(
+                            placa_norm, []
+                        ).append(pedido)
+            except Exception as e:
+                logger.error(
+                    "Falha ao carregar historico Club v3 para R2: %s", e,
+                )
+                # Continue with Pipefy-only history — degraded but functional
+
         if (
             settings.r2_modo != "off"
             and settings.r2_fonte_historico == "pipefy"
@@ -1231,11 +1381,49 @@ async def _executar_validacao_impl(
             for placa, items in resultados_hist:
                 historico_items_por_placa[placa] = items
             logger.info(
-                "Historico Pipefy+Club pre-carregado para %d placas "
+                "Historico Pipefy pre-carregado para %d placas "
                 "(%d items totais)",
                 len(historico_items_por_placa),
                 sum(len(v) for v in historico_items_por_placa.values()),
             )
+
+            # MERGE Club history into Pipefy history — Club items
+            # complement Pipefy items. Avoid duplicates by checking
+            # (id_pedido, chave_produto) pairs already present.
+            total_club_merged = 0
+            for placa in placas_unicas:
+                club_items = _buscar_historico_placa_club(
+                    placa,
+                    club_historico_por_placa,
+                    id_pedido_atual="",  # exclusion by OC is done later
+                )
+                if not club_items:
+                    continue
+                # Build set of existing (id_pedido, chave_produto) from
+                # Pipefy items to avoid duplicates
+                existing = set()
+                for it in historico_items_por_placa.get(placa, []):
+                    existing.add((
+                        str(it.get("id_pedido") or "").strip(),
+                        it.get("chave_produto") or "",
+                    ))
+                novos = [
+                    it for it in club_items
+                    if (
+                        str(it.get("id_pedido") or "").strip(),
+                        it.get("chave_produto") or "",
+                    ) not in existing
+                ]
+                if novos:
+                    historico_items_por_placa.setdefault(placa, []).extend(novos)
+                    total_club_merged += len(novos)
+            if total_club_merged:
+                logger.info(
+                    "Club historico: %d items complementares mergeados "
+                    "(%d items totais agora)",
+                    total_club_merged,
+                    sum(len(v) for v in historico_items_por_placa.values()),
+                )
 
         def _historico_indexado_para_oc(
             placa: str, id_pedido_atual: str

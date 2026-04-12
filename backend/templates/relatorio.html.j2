@@ -24,10 +24,12 @@
   .card.ml .num { color: #d97706; }
   .card.muted .num { color: #6b7280; }
   table { width: 100%; background: white; border-collapse: collapse; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  th { background: #1a2332; color: white; text-align: left; padding: 12px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  td { padding: 10px; border-top: 1px solid #eef1f5; font-size: 13px; vertical-align: top; }
-  tr:hover td { background: #fafbfd; }
-  .tag { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  th { background: #1a2332; color: white; text-align: left; padding: 14px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 12px 14px; border-top: 1px solid #eef1f5; font-size: 13px; vertical-align: top; }
+  tr:nth-child(4n+1) td { background: #ffffff; }
+  tr:nth-child(4n+3) td { background: #f9fafb; }
+  tr:hover td { background: #eef2ff; }
+  .tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
   .tag.aprovada { background: #d1fae5; color: #065f46; }
   .tag.divergencia { background: #fed7aa; color: #9a3412; }
   .tag.bloqueada { background: #fecaca; color: #991b1b; }
@@ -36,6 +38,13 @@
   .motivo { color: #b91c1c; font-size: 12px; }
   .right { text-align: right; }
   .mono { font-family: "SF Mono", Consolas, monospace; }
+  .val-diff { color: #dc2626; font-weight: 700; }
+  .val-diff-note { font-size: 10px; color: #dc2626; font-weight: 400; }
+  .action-banner { padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 700; margin-bottom: 4px; display: inline-block; }
+  .action-banner.recusar { background: #dc2626; color: #fff; }
+  .action-banner.aprovar { background: #17a34a; color: #fff; }
+  .action-banner.atencao { background: #ea580c; color: #fff; }
+  .reinc-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; min-width: 110px; text-align: center; border-left: 3px solid; }
   .meta { margin-top: 24px; padding: 16px; background: white; border-radius: 8px; font-size: 12px; color: #5a6c7f; }
   details summary { cursor: pointer; font-size: 11px; color: #5a6c7f; list-style: revert; }
   details ul { font-size: 11px; margin: 6px 0 0 0; padding-left: 16px; color: #5a6c7f; line-height: 1.5; }
@@ -53,7 +62,7 @@
   .btn-copy.copied { background: #d1fae5; border-color: #10b981; color: #065f46; }
   /* Sub-linha de detalhe (Forma | Cotação | Comprador) */
   tr.subline td {
-    background: #f8fafc; border-top: 0; padding-top: 4px; padding-bottom: 10px;
+    background: #eef1f6 !important; border-top: 0; padding-top: 6px; padding-bottom: 12px;
     font-size: 11px; color: #5a6c7f;
   }
   tr.subline .lbl { color: #94a3b8; font-weight: 600; text-transform: uppercase;
@@ -64,8 +73,9 @@
   details.pecas summary:hover { color: #2563eb; }
   details.pecas ul { color: #334155; font-size: 12px; }
   details.pecas li.reincidente {
-    background: #fef2f2; border-left: 3px solid #dc2626; padding: 2px 8px;
-    margin: 2px 0; border-radius: 0 4px 4px 0;
+    background: #ffffff; border-left: 4px solid #dc2626; padding: 4px 10px;
+    margin: 4px 0; border-radius: 0 4px 4px 0; box-shadow: 0 1px 3px rgba(0,0,0,.05);
+    border: 1px solid #e5e7eb; border-left: 4px solid #dc2626;
   }
   details.pecas li.reincidente::before { content: "🔁 "; }
   details.pecas li.reincidente strong { color: #991b1b; }
@@ -103,7 +113,9 @@
   } %}
   {% set _cor = _cores.get(label, '#9ca3af') %}
   {% set _txt = _textos.get(label, label) %}
-  <span style="color:{{ _cor }};font-weight:600;">{{ _txt }}</span>
+  {% set _is_sem_dev = label in ('sim_sem_devolucao','sim_sem_devolucao_mesmo_forn') %}
+  {% set _bg = '#fecaca' if _is_sem_dev else ('#fef3c7' if label not in ('—',) and '—' not in label else 'transparent') %}
+  <span class="reinc-badge" style="color:{{ _cor }};border-left-color:{{ _cor }};background:{{ _bg }};">{{ _txt }}{% if divs and divs|length > 1 %} ({{ divs|length }}){% endif %}</span>
   {% if divs %}
     <details style="margin-top:4px;">
       <summary>{{ divs|length }} peça(s) reincidentes</summary>
@@ -236,6 +248,8 @@
         </div>
       {% endif %}
     </details>
+  {% elif produtos is none %}
+    <span style="background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:2px 8px;color:#92400e;font-size:11px;">Dados de pecas nao carregados -- execute nova validacao</span>
   {% else %}
     <span style="color:#9ca3af;font-size:11px;">—</span>
   {% endif %}
@@ -334,7 +348,11 @@
         <td>{{ (r.oc.fornecedor.for_nome if r.oc.fornecedor else "") or "—" }}</td>
         <td class="right mono"><strong>{{ "R$ %.2f"|format(r.valor_card) if r.valor_card else "—" }}</strong></td>
         <td class="right mono">{{ "R$ %.2f"|format(r.valor_club) if r.valor_club else "—" }}</td>
+        {% if r.valor_club and r.valor_pdf and r.valor_club != r.valor_pdf %}
+        <td class="right mono val-diff">{{ "R$ %.2f"|format(r.valor_pdf) }}<br><span class="val-diff-note">≠ Club: {{ "R$ %.2f"|format(r.valor_club) }}</span></td>
+        {% else %}
         <td class="right mono">{{ "R$ %.2f"|format(r.valor_pdf) if r.valor_pdf else "—" }}</td>
+        {% endif %}
         {% if _show_valor_cilia %}<td class="right mono">{{ "R$ %.2f"|format(r.valor_cilia) if r.valor_cilia else "—" }}</td>{% endif %}
         <td class="right">{{ r.qtd_cotacoes or 0 }}</td>
         <td>{{ r.peca_duplicada }}</td>
@@ -362,6 +380,18 @@
       {# Sub-linha cinza com Forma de Pagamento + Cotação + Comprador + botão Peças #}
       <tr class="subline">
         <td colspan="{{ _ncols }}">
+          {# Action guidance banner #}
+          {% set _has_reinc = r.divergencias_cross and r.divergencias_cross|length > 0 %}
+          {% set _reinc_sem_dev = r.reincidencia in ('sim_sem_devolucao','sim_sem_devolucao_mesmo_forn') %}
+          {% set _reinc_com_dev = r.reincidencia == 'sim_com_devolucao_peca' %}
+          {% set _low_quotes = (r.qtd_cotacoes or 0) < 3 %}
+          {% if _has_reinc and _reinc_sem_dev %}
+            <span class="action-banner recusar">RECUSAR -- Sem card de devolucao no Pipefy</span><br>
+          {% elif _has_reinc and _reinc_com_dev %}
+            <span class="action-banner aprovar">APROVAR -- Devolucao confirmada</span><br>
+          {% elif _low_quotes %}
+            <span class="action-banner atencao">ATENCAO -- Menos de 3 cotacoes</span><br>
+          {% endif %}
           <span class="lbl">Forma:</span>{{ r.forma_pagamento_canonica or "—" }}
           <span class="sep">·</span>
           <span class="lbl">Cotação:</span><span class="mono">{{ r.oc.id_cotacao or "—" }}</span>

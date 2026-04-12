@@ -50,13 +50,13 @@ export function Dashboard() {
   const [tabView, setTabView] = useState<TabView>("todas");
 
   // Filtrar resultados para revisao: OCs que requerem atenção do analista
-  // Exclui aprovadas e ja_processadas (a menos que tenham reincidência)
   const resultadosRevisao = resultados.filter((r) => {
     const temReincidencia = r.reincidencia && r.reincidencia !== "\u2014" && r.reincidencia !== "--";
     const temDivergencia = r.status === "divergencia" || r.status === "bloqueada";
     const poucasCotacoes = r.qtd_cotacoes != null && r.qtd_cotacoes < 3;
     const pecaDuplicada = r.peca_duplicada != null && r.peca_duplicada !== "Nao" && r.peca_duplicada !== "\u2014";
-    return temDivergencia || temReincidencia || poucasCotacoes || pecaDuplicada;
+    const semCard = !r.card_pipefy_id && !r.card_pipefy_link;
+    return temDivergencia || temReincidencia || poucasCotacoes || pecaDuplicada || semCard;
   });
 
   async function carregarHistorico() {
