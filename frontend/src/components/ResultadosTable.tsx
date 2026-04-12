@@ -693,7 +693,7 @@ export function ResultadosTable({ resultados }: Props) {
 
                 // Reincidencia label
                 let reincLabel = "\u2014";
-                let reincColor = COLORS.textMuted;
+                let reincColor: string = COLORS.textMuted;
                 if (hasReincidencia) {
                   if (r.reincidencia!.includes("sem_devolucao") || r.reincidencia!.includes("mesmo_forn")) {
                     reincLabel = "SEM devolucao";
