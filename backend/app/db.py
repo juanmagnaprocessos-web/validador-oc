@@ -221,6 +221,14 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("oc_resultados", "valor_card", "REAL"),
     ("cache_cancelamentos", "descricao_pecas", "TEXT"),
     ("cache_cancelamentos", "codigo_oc", "TEXT"),
+    # --- Sessão 11: dados enriquecidos para tela de revisão ---
+    ("oc_resultados", "divergencias_json", "TEXT"),       # JSON completo das divergências (com dados/links)
+    ("oc_resultados", "produtos_json", "TEXT"),            # JSON da lista de produtos da OC
+    ("oc_resultados", "reincidencia", "TEXT DEFAULT '—'"), # resumo reincidência
+    ("oc_resultados", "cancelamento", "TEXT DEFAULT '—'"), # resumo cancelamento
+    ("oc_resultados", "cancelamento_card_id", "TEXT"),
+    ("oc_resultados", "card_pipefy_link", "TEXT"),
+    ("oc_resultados", "forma_pagamento_canonica", "TEXT"),
 ]
 
 
@@ -384,14 +392,25 @@ def registrar_oc_resultado(validacao_id: int, payload: dict[str, Any]) -> None:
     if isinstance(regras, (list, dict)):
         regras = json.dumps(regras, ensure_ascii=False)
 
+    divergencias_json = payload.get("divergencias_json")
+    if isinstance(divergencias_json, (list, dict)):
+        divergencias_json = json.dumps(divergencias_json, ensure_ascii=False, default=str)
+
+    produtos_json = payload.get("produtos_json")
+    if isinstance(produtos_json, (list, dict)):
+        produtos_json = json.dumps(produtos_json, ensure_ascii=False, default=str)
+
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO oc_resultados
                (validacao_id, id_pedido, id_cotacao, placa, placa_normalizada,
                 fornecedor, comprador, forma_pagamento, valor_card, valor_club,
                 valor_pdf, valor_cilia, qtd_cotacoes, qtd_produtos, peca_duplicada,
-                status, regras_falhadas, fase_pipefy, card_pipefy_id, fase_pipefy_atual)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, regras_falhadas, fase_pipefy, card_pipefy_id, fase_pipefy_atual,
+                divergencias_json, produtos_json, reincidencia, cancelamento,
+                cancelamento_card_id, card_pipefy_link, forma_pagamento_canonica)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?)""",
             (
                 validacao_id,
                 payload.get("id_pedido"),
@@ -413,6 +432,13 @@ def registrar_oc_resultado(validacao_id: int, payload: dict[str, Any]) -> None:
                 payload.get("fase_pipefy"),
                 payload.get("card_pipefy_id"),
                 payload.get("fase_pipefy_atual"),
+                divergencias_json,
+                produtos_json,
+                payload.get("reincidencia", "—"),
+                payload.get("cancelamento", "—"),
+                payload.get("cancelamento_card_id"),
+                payload.get("card_pipefy_link"),
+                payload.get("forma_pagamento_canonica"),
             ),
         )
         conn.commit()
@@ -1053,10 +1079,11 @@ def resultados_de(validacao_id: int) -> list[dict[str, Any]]:
         result = []
         for r in rows:
             d = dict(r)
-            if d.get("regras_falhadas"):
-                try:
-                    d["regras_falhadas"] = json.loads(d["regras_falhadas"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            for campo_json in ("regras_falhadas", "divergencias_json", "produtos_json"):
+                if d.get(campo_json):
+                    try:
+                        d[campo_json] = json.loads(d[campo_json])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
             result.append(d)
         return result

@@ -28,6 +28,41 @@ export interface ValidarResponse {
   relatorio_xlsx: string;
 }
 
+export interface DivergenciaCompleta {
+  regra: string;
+  titulo: string;
+  descricao: string;
+  severidade: "erro" | "alerta" | "info";
+  dados: {
+    placa?: string;
+    chave_produto?: string;
+    descricao_peca?: string;
+    oc_anterior?: string;
+    data_anterior?: string;
+    fornecedor_anterior_id?: string;
+    fornecedor_anterior_nome?: string;
+    mesmo_fornecedor?: boolean;
+    tem_devolucao_peca?: boolean;
+    tem_devolucao_outra_peca?: boolean;
+    sem_devolucao?: boolean;
+    qtd_reincidencias?: number;
+    link_oc_anterior?: string;
+    link_devolucao?: string;
+    card_devolucao_id?: string;
+    peca_descricao_devolucao?: string;
+    duplicados?: string[];
+    [key: string]: unknown;
+  };
+}
+
+export interface ProdutoOC {
+  descricao: string | null;
+  quantidade: number;
+  ean: string | null;
+  cod_interno: string | null;
+  produto_id: string | null;
+}
+
 export interface OcResultado {
   id: number;
   validacao_id: number;
@@ -50,6 +85,14 @@ export interface OcResultado {
   fase_pipefy: string | null;
   fase_pipefy_atual: string | null;
   card_pipefy_id: string | null;
+  // Campos enriquecidos
+  divergencias_json: DivergenciaCompleta[] | null;
+  produtos_json: ProdutoOC[] | null;
+  reincidencia: string | null;
+  cancelamento: string | null;
+  cancelamento_card_id: string | null;
+  card_pipefy_link: string | null;
+  forma_pagamento_canonica: string | null;
 }
 
 export interface HistoricoEntry {

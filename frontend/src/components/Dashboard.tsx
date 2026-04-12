@@ -37,6 +37,8 @@ interface HistoricoItem {
   ja_processadas?: number | null;
 }
 
+type TabView = "todas" | "revisao";
+
 export function Dashboard() {
   const [dataD1, setDataD1] = useState<string>(d1Iso());
   const [dryRun, setDryRun] = useState<boolean>(true);
@@ -45,6 +47,17 @@ export function Dashboard() {
   const [ultima, setUltima] = useState<ValidarResponse | null>(null);
   const [resultados, setResultados] = useState<OcResultado[]>([]);
   const [historico, setHistorico] = useState<HistoricoItem[]>([]);
+  const [tabView, setTabView] = useState<TabView>("todas");
+
+  // Filtrar resultados para revisao: OCs que requerem atenção do analista
+  // Exclui aprovadas e ja_processadas (a menos que tenham reincidência)
+  const resultadosRevisao = resultados.filter((r) => {
+    const temReincidencia = r.reincidencia && r.reincidencia !== "\u2014" && r.reincidencia !== "--";
+    const temDivergencia = r.status === "divergencia" || r.status === "bloqueada";
+    const poucasCotacoes = r.qtd_cotacoes != null && r.qtd_cotacoes < 3;
+    const pecaDuplicada = r.peca_duplicada != null && r.peca_duplicada !== "Nao" && r.peca_duplicada !== "\u2014";
+    return temDivergencia || temReincidencia || poucasCotacoes || pecaDuplicada;
+  });
 
   async function carregarHistorico() {
     try {
@@ -267,9 +280,58 @@ export function Dashboard() {
         </section>
       )}
 
+      {/* Abas: Todas OCs / Revisao Final */}
+      {resultados.length > 0 && (
+        <div style={{ marginTop: 24, display: "flex", gap: 0, borderBottom: `2px solid ${COLORS.borderLight}` }}>
+          <button
+            onClick={() => setTabView("todas")}
+            style={{
+              ...btnSecondary,
+              borderRadius: "6px 6px 0 0",
+              border: "none",
+              borderBottom: tabView === "todas" ? `2px solid ${COLORS.primary}` : "2px solid transparent",
+              background: tabView === "todas" ? COLORS.bgWhite : "transparent",
+              color: tabView === "todas" ? COLORS.primary : COLORS.textSecondary,
+              fontWeight: tabView === "todas" ? 600 : 400,
+            }}
+          >
+            Todas OCs ({resultados.length})
+          </button>
+          <button
+            onClick={() => setTabView("revisao")}
+            style={{
+              ...btnSecondary,
+              borderRadius: "6px 6px 0 0",
+              border: "none",
+              borderBottom: tabView === "revisao" ? `2px solid ${COLORS.danger}` : "2px solid transparent",
+              background: tabView === "revisao" ? "#fff5f5" : "transparent",
+              color: tabView === "revisao" ? COLORS.danger : COLORS.textSecondary,
+              fontWeight: tabView === "revisao" ? 600 : 400,
+            }}
+          >
+            Revisao Final ({resultadosRevisao.length})
+            {resultadosRevisao.length > 0 && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  background: COLORS.danger,
+                  color: "#fff",
+                  padding: "1px 6px",
+                  borderRadius: 10,
+                  fontSize: 10,
+                  fontWeight: 700,
+                }}
+              >
+                !
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* Tabela de resultados */}
-      <section style={{ marginTop: 24 }} aria-label="Resultados da validacao">
-        <ResultadosTable resultados={resultados} />
+      <section style={{ marginTop: 4 }} aria-label="Resultados da validacao">
+        <ResultadosTable resultados={tabView === "revisao" ? resultadosRevisao : resultados} />
       </section>
 
       {/* Historico */}

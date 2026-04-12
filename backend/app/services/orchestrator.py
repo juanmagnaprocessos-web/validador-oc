@@ -1489,6 +1489,35 @@ async def _executar_validacao_impl(
         )
 
         for r in resultados:
+            # Link para o card no Pipefy
+            card_link = None
+            if r.card_pipefy_id:
+                card_link = f"https://app.pipefy.com/pipes/{settings.pipe_id}#cards/{r.card_pipefy_id}"
+
+            # Serializar divergências COMPLETAS (com dados/links)
+            divergencias_completas = [
+                {
+                    "regra": d.regra,
+                    "titulo": d.titulo,
+                    "descricao": d.descricao,
+                    "severidade": d.severidade.value if hasattr(d.severidade, 'value') else str(d.severidade),
+                    "dados": d.dados,
+                }
+                for d in r.divergencias
+            ]
+
+            # Serializar produtos da OC
+            produtos_serializados = [
+                {
+                    "descricao": getattr(p, "descricao", None),
+                    "quantidade": getattr(p, "quantidade", 0),
+                    "ean": getattr(p, "ean", None),
+                    "cod_interno": getattr(p, "cod_interno", None),
+                    "produto_id": getattr(p, "produto_id", None),
+                }
+                for p in (r.produtos or [])
+            ]
+
             registrar_oc_resultado(
                 validacao_id,
                 {
@@ -1515,6 +1544,14 @@ async def _executar_validacao_impl(
                     "fase_pipefy": r.fase_destino.value if r.fase_destino else None,
                     "card_pipefy_id": r.card_pipefy_id,
                     "fase_pipefy_atual": r.fase_pipefy_atual,
+                    # --- Campos enriquecidos (Sessão 11) ---
+                    "divergencias_json": divergencias_completas,
+                    "produtos_json": produtos_serializados,
+                    "reincidencia": r.reincidencia,
+                    "cancelamento": r.cancelamento,
+                    "cancelamento_card_id": r.cancelamento_card_id,
+                    "card_pipefy_link": card_link,
+                    "forma_pagamento_canonica": r.forma_pagamento_canonica,
                 },
             )
 
