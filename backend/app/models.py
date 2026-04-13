@@ -260,6 +260,7 @@ class OcOrfa(BaseModel):
     # também às OCs órfãs — "Sim" / "Não" / "—" (sem cotação para checar).
     peca_duplicada: str = "—"
     qtd_produtos: int | None = None
+    qtd_cotacoes: int | None = None  # concorrentes da cotação (R1)
     # Divergências da R2 cross-time (parte 2) — incluem dados estruturados
     # com link para a OC anterior e link para o card de devolução, se houver.
     divergencias: list[Divergencia] = Field(default_factory=list)

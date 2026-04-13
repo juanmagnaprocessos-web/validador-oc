@@ -1133,11 +1133,18 @@ async def _executar_validacao_impl(
                 comprador = nome
             orfas_raw.append((oc, comprador))
 
-        async def _produtos_orfa(oc: OrdemCompra) -> list[ProdutoCotacao]:
+        async def _dados_orfa(
+            oc: OrdemCompra,
+        ) -> tuple[list[ProdutoCotacao], int]:
             """Busca os ITENS efetivamente comprados na OC órfã via
             `get_order_details(id_pedido).items` (NÃO `get_produtos_cotacao`,
             que retorna a cotação inteira e gera falsos positivos quando
-            várias OCs compartilham a mesma cotação)."""
+            várias OCs compartilham a mesma cotação).
+            Também busca concorrentes via `get_concorrentes(id_cotacao)`
+            para preencher qtd_cotacoes.
+            Retorna (produtos, qtd_concorrentes)."""
+            produtos: list[ProdutoCotacao] = []
+            qtd_conc = 0
             async with semaforo:
                 try:
                     det = await club.get_order_details(oc.id_pedido)
@@ -1146,26 +1153,39 @@ async def _executar_validacao_impl(
                         "Falha get_order_details para OC órfã %s: %s",
                         oc.id_pedido, e,
                     )
-                    return []
-            items = det.get("items") or []
-            return [
-                ProdutoCotacao(
-                    produto_id=str(
-                        (it.get("product") or {}).get("id") or ""
-                    ),
-                    descricao=(it.get("product") or {}).get("name"),
-                    quantidade=float(it.get("quantity") or 0),
-                    ean=(it.get("product") or {}).get("ean"),
-                    cod_interno=(it.get("product") or {}).get("internal_code"),
-                    valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
-                    valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
-                )
-                for it in items
-            ]
+                    return [], 0
+                items = det.get("items") or []
+                produtos = [
+                    ProdutoCotacao(
+                        produto_id=str(
+                            (it.get("product") or {}).get("id") or ""
+                        ),
+                        descricao=(it.get("product") or {}).get("name"),
+                        quantidade=float(it.get("quantity") or 0),
+                        ean=(it.get("product") or {}).get("ean"),
+                        cod_interno=(it.get("product") or {}).get("internal_code"),
+                        valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
+                        valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
+                    )
+                    for it in items
+                ]
+                # Buscar concorrentes se tiver id_cotacao
+                if oc.id_cotacao:
+                    try:
+                        concs = await club.get_concorrentes(oc.id_cotacao)
+                        qtd_conc = len(concs)
+                    except Exception as e:
+                        logger.warning(
+                            "Falha get_concorrentes para OC órfã %s (cot %s): %s",
+                            oc.id_pedido, oc.id_cotacao, e,
+                        )
+            return produtos, qtd_conc
 
-        produtos_por_orfa = await asyncio.gather(
-            *[_produtos_orfa(oc) for oc, _ in orfas_raw]
+        dados_orfas = await asyncio.gather(
+            *[_dados_orfa(oc) for oc, _ in orfas_raw]
         )
+        produtos_por_orfa = [d[0] for d in dados_orfas]
+        cotacoes_por_orfa = [d[1] for d in dados_orfas]
         logger.info(
             "Coletados produtos para %d OCs órfãs", len(orfas_raw)
         )
@@ -1429,6 +1449,79 @@ async def _executar_validacao_impl(
                     sum(len(v) for v in historico_items_por_placa.values()),
                 )
 
+        # 4d.2 — INJETAR items do D-1 atual no historico para detecção
+        # intra-batch. Sem isso, OCs da MESMA placa no MESMO D-1 não se
+        # veem (o Club historico só vai até D-2). O _historico_indexado_para_oc
+        # exclui a própria OC depois, garantindo que A não se auto-detecte.
+        if (
+            settings.r2_modo != "off"
+            and settings.r2_fonte_historico == "pipefy"
+        ):
+            total_d1_injetado = 0
+            data_d1_iso = data_d1.isoformat()
+            # Items de cards (coletas) do D-1
+            for coleta in coletas:
+                oc = coleta.oc
+                placa_norm = oc.placa_normalizada
+                if not placa_norm or not coleta.produtos_cotacao:
+                    continue
+                forn_id = str(oc.fornecedor.for_id) if oc.fornecedor else None
+                forn_nome = oc.fornecedor.for_nome if oc.fornecedor else None
+                card_id = coleta.card_pipefy.id if coleta.card_pipefy else None
+                for p in coleta.produtos_cotacao:
+                    chave_p = chave_produto(
+                        ean=p.ean, codigo=p.cod_interno, descricao=p.descricao,
+                    )
+                    desc_raw = (p.descricao or "").strip()
+                    historico_items_por_placa.setdefault(placa_norm, []).append({
+                        "id_pedido": oc.id_pedido,
+                        "id_cotacao": oc.id_cotacao,
+                        "data_oc": data_d1_iso,
+                        "identificador": oc.identificador,
+                        "placa_normalizada": placa_norm,
+                        "chave_produto": chave_p,
+                        "descricao": desc_raw,
+                        "descricao_normalizada": desc_raw.lower(),
+                        "fornecedor_id": forn_id,
+                        "fornecedor_nome": forn_nome,
+                        "quantidade": float(p.quantidade or 0),
+                        "card_pipefy_id": card_id,
+                    })
+                    total_d1_injetado += 1
+            # Items de OCs orfas do D-1
+            for (oc, _comprador), prods in zip(orfas_raw, produtos_por_orfa):
+                placa_norm = oc.placa_normalizada
+                if not placa_norm or not prods:
+                    continue
+                forn_id = str(oc.fornecedor.for_id) if oc.fornecedor else None
+                forn_nome = oc.fornecedor.for_nome if oc.fornecedor else None
+                for p in prods:
+                    chave_p = chave_produto(
+                        ean=p.ean, codigo=p.cod_interno, descricao=p.descricao,
+                    )
+                    desc_raw = (p.descricao or "").strip()
+                    historico_items_por_placa.setdefault(placa_norm, []).append({
+                        "id_pedido": oc.id_pedido,
+                        "id_cotacao": oc.id_cotacao,
+                        "data_oc": data_d1_iso,
+                        "identificador": oc.identificador,
+                        "placa_normalizada": placa_norm,
+                        "chave_produto": chave_p,
+                        "descricao": desc_raw,
+                        "descricao_normalizada": desc_raw.lower(),
+                        "fornecedor_id": forn_id,
+                        "fornecedor_nome": forn_nome,
+                        "quantidade": float(p.quantidade or 0),
+                        "card_pipefy_id": None,
+                    })
+                    total_d1_injetado += 1
+            if total_d1_injetado:
+                logger.info(
+                    "D-1 intra-batch: %d items do dia atual injetados no "
+                    "historico para deteccao entre OCs do mesmo dia",
+                    total_d1_injetado,
+                )
+
         def _historico_indexado_para_oc(
             placa: str, id_pedido_atual: str
         ) -> dict[str, list[dict[str, Any]]] | None:
@@ -1454,7 +1547,7 @@ async def _executar_validacao_impl(
         # `aplicar_regras` mais abaixo. Para órfãs, precisamos rodar
         # manualmente porque elas não passam por `aplicar_regras`.
         ocs_orfas: list[OcOrfa] = []
-        for (oc, comprador), produtos in zip(orfas_raw, produtos_por_orfa):
+        for (oc, comprador), produtos, qtd_cot_orfa in zip(orfas_raw, produtos_por_orfa, cotacoes_por_orfa):
             peca_dup_interna = _verificar_duplicidade_interna(produtos)
             forn_id = oc.fornecedor.for_id if oc.fornecedor else None
             hist_indexado_orfa = _historico_indexado_para_oc(
@@ -1506,6 +1599,7 @@ async def _executar_validacao_impl(
                     data_pedido=oc.data_pedido,
                     peca_duplicada=peca_dup_interna,
                     qtd_produtos=len(produtos) if produtos else None,
+                    qtd_cotacoes=qtd_cot_orfa if qtd_cot_orfa else None,
                     divergencias=divs_cross,
                     reincidencia=reinc,
                     cancelamento=cancel_label,
@@ -1787,7 +1881,7 @@ async def _executar_validacao_impl(
                     "valor_club": float(o.valor) if o.valor else None,
                     "valor_pdf": None,
                     "valor_cilia": None,
-                    "qtd_cotacoes": None,
+                    "qtd_cotacoes": o.qtd_cotacoes,
                     "qtd_produtos": o.qtd_produtos,
                     "peca_duplicada": o.peca_duplicada,
                     "status": "sem_card_pipefy",
