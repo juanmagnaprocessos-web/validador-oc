@@ -585,7 +585,7 @@ def _buscar_historico_placa_club(
             if parsed:
                 data_oc_iso = parsed.isoformat()
 
-        for item in pedido.get("items") or []:
+        for item in pedido.get("items") or pedido.get("itens") or pedido.get("products") or []:
             product = item.get("product") or {}
             desc_raw = product.get("name") or item.get("descricao") or ""
             chave = chave_produto(
@@ -1343,11 +1343,65 @@ async def _executar_validacao_impl(
                     products=True,
                     seller=True,
                 )
+                # Diagnóstico: quantos pedidos têm items inline?
+                com_items = sum(
+                    1 for p in pedidos_historicos_club
+                    if p.get("items") or p.get("itens")
+                )
+                sem_items_list = [
+                    p for p in pedidos_historicos_club
+                    if not (p.get("items") or p.get("itens"))
+                ]
                 logger.info(
                     "Club v3: %d OCs historicas carregadas de %s a %s "
-                    "para complemento R2",
+                    "para complemento R2 (%d com items, %d sem items)",
                     len(pedidos_historicos_club), janela_inicio, janela_fim,
+                    com_items, len(sem_items_list),
                 )
+
+                # Enriquecer pedidos sem items via get_order_details
+                if sem_items_list:
+                    logger.info(
+                        "Enriquecendo %d pedidos sem items via "
+                        "get_order_details...",
+                        len(sem_items_list),
+                    )
+                    sem_enrich = asyncio.Semaphore(concorrencia)
+
+                    async def _enriquecer_pedido(pedido: dict):
+                        id_p = str(
+                            pedido.get("id_pedido")
+                            or pedido.get("id")
+                            or ""
+                        ).strip()
+                        if not id_p:
+                            return
+                        async with sem_enrich:
+                            try:
+                                det = await club.get_order_details(id_p)
+                                pedido["items"] = (
+                                    det.get("items")
+                                    or det.get("itens")
+                                    or []
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Falha enriquecer OC hist %s: %s",
+                                    id_p, e,
+                                )
+
+                    await asyncio.gather(
+                        *[_enriquecer_pedido(p) for p in sem_items_list]
+                    )
+                    enriquecidos = sum(
+                        1 for p in sem_items_list
+                        if p.get("items")
+                    )
+                    logger.info(
+                        "Enriquecidos %d/%d pedidos com items",
+                        enriquecidos, len(sem_items_list),
+                    )
+
                 # Index by placa_normalizada
                 for pedido in pedidos_historicos_club:
                     placa_raw = (
@@ -1792,9 +1846,27 @@ async def _executar_validacao_impl(
                 for d in r.divergencias
             ]
 
+            # Contagem de OCs por peça: quantas OCs distintas compraram
+            # cada peça desta placa (incluindo a OC atual no batch).
+            hist_placa = historico_items_por_placa.get(
+                r.oc.placa_normalizada, []
+            )
+            # Agrupar por chave_produto → set de id_pedido distintos
+            ocs_por_chave: dict[str, set[str]] = {}
+            for it in hist_placa:
+                ch = it.get("chave_produto") or ""
+                ip = str(it.get("id_pedido") or "").strip()
+                if ch and ip:
+                    ocs_por_chave.setdefault(ch, set()).add(ip)
+
             # Serializar produtos da OC
-            produtos_serializados = [
-                {
+            produtos_serializados = []
+            for p in (r.produtos or []):
+                ch_p = chave_produto(
+                    ean=p.ean, codigo=p.cod_interno, descricao=p.descricao,
+                )
+                qtd_ocs = len(ocs_por_chave.get(ch_p, set()))
+                produtos_serializados.append({
                     "descricao": getattr(p, "descricao", None),
                     "quantidade": getattr(p, "quantidade", 0),
                     "ean": getattr(p, "ean", None),
@@ -1802,9 +1874,8 @@ async def _executar_validacao_impl(
                     "produto_id": getattr(p, "produto_id", None),
                     "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
                     "valor_total": float(p.valor_total) if p.valor_total else None,
-                }
-                for p in (r.produtos or [])
-            ]
+                    "qtd_ocs_com_peca": qtd_ocs,
+                })
 
             registrar_oc_resultado(
                 validacao_id,
@@ -1845,8 +1916,25 @@ async def _executar_validacao_impl(
 
         # 5b. Persistir OCs órfãs (Club sem card Pipefy) para o Dashboard
         for o in ocs_orfas:
-            produtos_orfa_ser = [
-                {
+            placa_orfa_norm = (
+                o.identificador.replace("-", "").replace(" ", "").upper().strip()
+                if o.identificador else ""
+            )
+            hist_placa_orfa = historico_items_por_placa.get(placa_orfa_norm, [])
+            ocs_por_chave_orfa: dict[str, set[str]] = {}
+            for it in hist_placa_orfa:
+                ch = it.get("chave_produto") or ""
+                ip = str(it.get("id_pedido") or "").strip()
+                if ch and ip:
+                    ocs_por_chave_orfa.setdefault(ch, set()).add(ip)
+
+            produtos_orfa_ser = []
+            for p in (o.produtos or []):
+                ch_p = chave_produto(
+                    ean=p.ean, codigo=p.cod_interno, descricao=p.descricao,
+                )
+                qtd_ocs = len(ocs_por_chave_orfa.get(ch_p, set()))
+                produtos_orfa_ser.append({
                     "descricao": getattr(p, "descricao", None),
                     "quantidade": getattr(p, "quantidade", 0),
                     "ean": getattr(p, "ean", None),
@@ -1854,9 +1942,8 @@ async def _executar_validacao_impl(
                     "produto_id": getattr(p, "produto_id", None),
                     "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
                     "valor_total": float(p.valor_total) if p.valor_total else None,
-                }
-                for p in (o.produtos or [])
-            ]
+                    "qtd_ocs_com_peca": qtd_ocs,
+                })
             divs_orfa_ser = [
                 {
                     "regra": d.regra,

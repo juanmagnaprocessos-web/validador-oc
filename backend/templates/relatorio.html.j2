@@ -202,6 +202,9 @@
             {% if p.quantidade %} — qtd: {{ p.quantidade }}{% endif %}
             {% if p.valor_unitario %} — R$ {{ "%.2f"|format(p.valor_unitario) }}/un{% endif %}
             {% if p.valor_total %} (total: R$ {{ "%.2f"|format(p.valor_total) }}){% endif %}
+            {% if p.qtd_ocs_com_peca is defined and p.qtd_ocs_com_peca and p.qtd_ocs_com_peca > 1 %}
+              <span style="color:#dc2626;font-weight:700;background:#fecaca;padding:1px 6px;border-radius:3px;font-size:10px;margin-left:4px;">{{ p.qtd_ocs_com_peca }} OCs</span>
+            {% endif %}
             {% if p.ean %} <span style="color:#94a3b8;">[EAN {{ p.ean }}]</span>{% endif %}
             {% if _eh_reinc %}
               <br>

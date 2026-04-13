@@ -66,6 +66,7 @@ export interface ProdutoOC {
   produto_id: string | null;
   valor_unitario: number | null;
   valor_total: number | null;
+  qtd_ocs_com_peca?: number;
 }
 
 export interface OcResultado {

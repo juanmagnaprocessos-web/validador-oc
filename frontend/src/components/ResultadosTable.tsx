@@ -259,6 +259,7 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                 <th style={{ ...thSmall, textAlign: "right" }}>Qtd</th>
                 <th style={{ ...thSmall, textAlign: "right" }}>Valor Unit.</th>
                 <th style={{ ...thSmall, textAlign: "right" }}>Valor Total</th>
+                <th style={{ ...thSmall, textAlign: "center" }} title="Qtd de OCs que compraram esta peca">OCs</th>
                 <th style={{ ...thSmall, textAlign: "center" }}>Reincidencia</th>
               </tr>
             </thead>
@@ -296,6 +297,14 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                     </td>
                     <td style={{ padding: "6px 8px", textAlign: "right", fontSize: 11 }}>
                       {fmtMoney(p.valor_total ?? null)}
+                    </td>
+                    <td style={{
+                      padding: "6px 8px", textAlign: "center", fontSize: 11,
+                      fontWeight: (p.qtd_ocs_com_peca ?? 0) > 1 ? 700 : 400,
+                      color: (p.qtd_ocs_com_peca ?? 0) > 1 ? COLORS.danger : COLORS.text,
+                      background: (p.qtd_ocs_com_peca ?? 0) > 1 ? "#fef2f2" : "transparent",
+                    }}>
+                      {p.qtd_ocs_com_peca ?? "--"}
                     </td>
                     <td style={{ padding: "6px 8px", textAlign: "center", fontSize: 11 }}>
                       {isReincidente && divPeca ? (
