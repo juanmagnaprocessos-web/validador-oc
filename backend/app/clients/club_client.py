@@ -7,12 +7,17 @@ Todos os endpoints confirmados em `api_clubdacotacao_instrucoes.md`.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import httpx
+
+# Regex para extrair placa brasileira do texto de observação da cotação.
+# Formato Mercosul: AAA0A00 ou antigo: AAA0000 (com ou sem hífen)
+_RE_PLACA = re.compile(r"\b([A-Z]{3})-?(\d[A-Z0-9]\d{2})\b", re.IGNORECASE)
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -342,8 +347,19 @@ class ClubClient:
             raw["id_cotacao"] = raw["number_quote"]
 
         # --- Identificador / placa ---
+        # A API v3 NÃO retorna 'identifier' diretamente no pedido.
+        # A placa está embutida no campo request.obs da cotação, ex:
+        # "PRISMA (2017) QQF-2C69 — Cinza — 9BGK..."
         if "identificador" not in raw and "identifier" in raw:
             raw["identificador"] = raw["identifier"]
+        if not raw.get("identificador") and not raw.get("identifier"):
+            req = raw.get("request") or {}
+            obs = req.get("obs") or ""
+            if obs:
+                m = _RE_PLACA.search(obs)
+                if m:
+                    raw["identificador"] = f"{m.group(1).upper()}-{m.group(2).upper()}"
+                    raw["identifier"] = raw["identificador"]
 
         # --- Valor ---
         if "valor_pedido" not in raw and "value" in raw:
