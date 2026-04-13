@@ -11,7 +11,8 @@ export type StatusValidacao =
   | "divergencia"
   | "bloqueada"
   | "aguardando_ml"
-  | "ja_processada";
+  | "ja_processada"
+  | "sem_card_pipefy";
 
 export interface ValidarResponse {
   validacao_id: number;
@@ -26,6 +27,8 @@ export interface ValidarResponse {
   dry_run: boolean;
   relatorio_html: string;
   relatorio_xlsx: string;
+  cilia_mode?: string;
+  cilia_base_url?: string;
 }
 
 export interface DivergenciaCompleta {
@@ -61,6 +64,8 @@ export interface ProdutoOC {
   ean: string | null;
   cod_interno: string | null;
   produto_id: string | null;
+  valor_unitario: number | null;
+  valor_total: number | null;
 }
 
 export interface OcResultado {

@@ -737,6 +737,8 @@ async def _coletar_para_card(
             quantidade=float(it.get("quantity") or 0),
             ean=(it.get("product") or {}).get("ean"),
             cod_interno=(it.get("product") or {}).get("internal_code"),
+            valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
+            valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
         )
         for it in (detalhes.get("items") or [])
     ]
@@ -1155,6 +1157,8 @@ async def _executar_validacao_impl(
                     quantidade=float(it.get("quantity") or 0),
                     ean=(it.get("product") or {}).get("ean"),
                     cod_interno=(it.get("product") or {}).get("internal_code"),
+                    valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
+                    valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
                 )
                 for it in items
             ]
@@ -1702,6 +1706,8 @@ async def _executar_validacao_impl(
                     "ean": getattr(p, "ean", None),
                     "cod_interno": getattr(p, "cod_interno", None),
                     "produto_id": getattr(p, "produto_id", None),
+                    "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
+                    "valor_total": float(p.valor_total) if p.valor_total else None,
                 }
                 for p in (r.produtos or [])
             ]
@@ -1742,6 +1748,63 @@ async def _executar_validacao_impl(
                     "forma_pagamento_canonica": r.forma_pagamento_canonica,
                 },
             )
+
+        # 5b. Persistir OCs órfãs (Club sem card Pipefy) para o Dashboard
+        for o in ocs_orfas:
+            produtos_orfa_ser = [
+                {
+                    "descricao": getattr(p, "descricao", None),
+                    "quantidade": getattr(p, "quantidade", 0),
+                    "ean": getattr(p, "ean", None),
+                    "cod_interno": getattr(p, "cod_interno", None),
+                    "produto_id": getattr(p, "produto_id", None),
+                    "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
+                    "valor_total": float(p.valor_total) if p.valor_total else None,
+                }
+                for p in (o.produtos or [])
+            ]
+            divs_orfa_ser = [
+                {
+                    "regra": d.regra,
+                    "titulo": d.titulo,
+                    "descricao": d.descricao,
+                    "severidade": d.severidade.value if hasattr(d.severidade, 'value') else str(d.severidade),
+                    "dados": d.dados,
+                }
+                for d in (o.divergencias or [])
+            ]
+            registrar_oc_resultado(
+                validacao_id,
+                {
+                    "id_pedido": o.id_pedido,
+                    "id_cotacao": o.id_cotacao,
+                    "placa": o.identificador,
+                    "placa_normalizada": o.identificador.replace("-", "").replace(" ", "").upper().strip() if o.identificador else None,
+                    "fornecedor": o.fornecedor,
+                    "comprador": o.comprador,
+                    "forma_pagamento": o.forma_pagamento,
+                    "valor_card": None,
+                    "valor_club": float(o.valor) if o.valor else None,
+                    "valor_pdf": None,
+                    "valor_cilia": None,
+                    "qtd_cotacoes": None,
+                    "qtd_produtos": o.qtd_produtos,
+                    "peca_duplicada": o.peca_duplicada,
+                    "status": "sem_card_pipefy",
+                    "regras_falhadas": [],
+                    "fase_pipefy": None,
+                    "card_pipefy_id": None,
+                    "fase_pipefy_atual": None,
+                    "divergencias_json": divs_orfa_ser,
+                    "produtos_json": produtos_orfa_ser,
+                    "reincidencia": o.reincidencia,
+                    "cancelamento": o.cancelamento,
+                    "cancelamento_card_id": o.cancelamento_card_id,
+                    "card_pipefy_link": None,
+                    "forma_pagamento_canonica": o.forma_pagamento,
+                },
+            )
+        logger.info("Persistidas %d OCs órfãs em oc_resultados", len(ocs_orfas))
 
         # 6. Atuar no Pipefy.
         # Em modo "consulta" (default), nenhuma chamada externa é feita —

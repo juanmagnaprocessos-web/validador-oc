@@ -4,6 +4,8 @@ import { COLORS, cardPanel, thStyle, tdStyle, btnSecondary, RADIUS } from "../st
 
 interface Props {
   resultados: OcResultado[];
+  ciliaMode?: string;
+  ciliaBaseUrl?: string;
 }
 
 const STATUS_LABEL: Record<
@@ -15,6 +17,7 @@ const STATUS_LABEL: Record<
   bloqueada: { text: "Bloqueada", bg: COLORS.errorBg, fg: COLORS.errorFg },
   aguardando_ml: { text: "ML -- Manual", bg: COLORS.warningBg, fg: COLORS.warningFg },
   ja_processada: { text: "Ja processada", bg: COLORS.borderLight, fg: "#374151" },
+  sem_card_pipefy: { text: "Sem card Pipefy", bg: "#ede9fe", fg: "#7c3aed" },
 };
 
 const SEV_COLORS: Record<string, { bg: string; fg: string; icon: string }> = {
@@ -120,7 +123,7 @@ function ActionGuidanceBanner({ r }: { r: OcResultado }) {
   return null;
 }
 
-function DetalheOC({ r }: { r: OcResultado }) {
+function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?: string; ciliaBaseUrl?: string }) {
   const divergencias = r.divergencias_json ?? [];
   const produtos = r.produtos_json ?? [];
   const divR2 = divergencias.filter((d) => d.regra === "R2");
@@ -183,6 +186,52 @@ function DetalheOC({ r }: { r: OcResultado }) {
               color={COLORS.danger}
             />
           )}
+          {ciliaMode && ciliaMode !== "off" && ciliaBaseUrl && (
+            <LinkBadge
+              href={`${ciliaBaseUrl}/users/sign_in`}
+              label="Verificar no Cilia"
+              color="#6d28d9"
+            />
+          )}
+          <LinkBadge
+            href="https://painel.clubdacotacao.com.br/relatorios/"
+            label="Consultar no Club"
+            color="#ea580c"
+          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(r.id_pedido);
+            }}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              padding: "4px 10px", background: "#f1f5f9", color: COLORS.text,
+              borderRadius: 4, fontSize: 11, fontWeight: 500, border: "1px solid #cbd5e1",
+              cursor: "pointer",
+            }}
+            title="Copiar numero da OC"
+          >
+            Copiar N. OC
+          </button>
+          {r.placa && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(r.placa!);
+              }}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                padding: "4px 10px", background: "#f1f5f9", color: COLORS.text,
+                borderRadius: 4, fontSize: 11, fontWeight: 500, border: "1px solid #cbd5e1",
+                cursor: "pointer",
+              }}
+              title="Copiar placa"
+            >
+              Copiar Placa
+            </button>
+          )}
         </div>
 
         {/* Lista de Pecas */}
@@ -208,12 +257,17 @@ function DetalheOC({ r }: { r: OcResultado }) {
                 <th style={{ ...thSmall, width: 24 }}></th>
                 <th style={thSmall}>Descricao</th>
                 <th style={{ ...thSmall, textAlign: "right" }}>Qtd</th>
+                <th style={{ ...thSmall, textAlign: "right" }}>Valor Unit.</th>
+                <th style={{ ...thSmall, textAlign: "right" }}>Valor Total</th>
                 <th style={{ ...thSmall, textAlign: "center" }}>Reincidencia</th>
               </tr>
             </thead>
             <tbody>
               {produtos.map((p, i) => {
-                const chave = p.ean || p.cod_interno || p.descricao || "";
+                const _ean = (p.ean || "").trim();
+                const _cod = (p.cod_interno || "").trim();
+                const _desc = (p.descricao || "").trim().toLowerCase();
+                const chave = _ean ? `ean:${_ean}` : _cod ? `cod:${_cod}` : _desc ? `desc:${_desc}` : "";
                 const isReincidente = pecasReincidentes.has(chave);
                 const divPeca = divR2.find((d) => d.dados?.chave_produto === chave);
                 return (
@@ -237,6 +291,12 @@ function DetalheOC({ r }: { r: OcResultado }) {
                       {p.descricao || "--"}
                     </td>
                     <td style={{ padding: "6px 8px", textAlign: "right" }}>{p.quantidade}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", fontSize: 11 }}>
+                      {fmtMoney(p.valor_unitario ?? null)}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", fontSize: 11 }}>
+                      {fmtMoney(p.valor_total ?? null)}
+                    </td>
                     <td style={{ padding: "6px 8px", textAlign: "center", fontSize: 11 }}>
                       {isReincidente && divPeca ? (
                         <ReincidenciaBadge div={divPeca} />
@@ -279,7 +339,7 @@ function DetalheOC({ r }: { r: OcResultado }) {
             type={
               !r.reincidencia || r.reincidencia === "\u2014"
                 ? "ok"
-                : r.reincidencia.includes("sem_devolucao") || r.reincidencia.includes("mesmo_forn")
+                : r.reincidencia.includes("sem_devolucao")
                   ? "error"
                   : "warn"
             }
@@ -597,7 +657,7 @@ const thSmall: React.CSSProperties = {
 // Tabela Principal
 // ============================================================
 
-export function ResultadosTable({ resultados }: Props) {
+export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) {
   const [sortCol, setSortCol] = useState<SortCol | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
@@ -697,7 +757,7 @@ export function ResultadosTable({ resultados }: Props) {
     (r) => r.reincidencia && r.reincidencia !== "\u2014" && r.reincidencia !== "--"
   ).length;
   const reincSemDevolucao = resultados.filter(
-    (r) => r.reincidencia && (r.reincidencia.includes("sem_devolucao") || r.reincidencia.includes("mesmo_forn"))
+    (r) => r.reincidencia && r.reincidencia.includes("sem_devolucao")
   ).length;
 
   const columns: { label: string; col: SortCol | null; align?: "right" }[] = [
@@ -783,7 +843,7 @@ export function ResultadosTable({ resultados }: Props) {
                 const st = STATUS_LABEL[r.status] ?? STATUS_LABEL.aprovada;
                 const isExpanded = expandedIds.has(r.id);
                 const hasReincidencia = r.reincidencia && r.reincidencia !== "\u2014";
-                const reincSemDev = r.reincidencia?.includes("sem_devolucao") || r.reincidencia?.includes("mesmo_forn");
+                const reincSemDev = r.reincidencia?.includes("sem_devolucao");
 
                 let motivo = (r.regras_falhadas ?? [])
                   .map((d) => `[${d.regra}] ${d.titulo}`)
@@ -792,23 +852,35 @@ export function ResultadosTable({ resultados }: Props) {
                   motivo = "Fornecedor ML -- manual";
                 } else if (r.status === "ja_processada") {
                   motivo = `Ja em "${r.fase_pipefy_atual ?? "?"}"`;
+                } else if (r.status === "sem_card_pipefy") {
+                  motivo = "OC sem card no Pipefy";
                 }
 
-                // Reincidencia label
+                // Reincidencia label — mapeamento exato alinhado com HTML/Excel
                 let reincLabel = "\u2014";
                 let reincColor: string = COLORS.textMuted;
                 if (hasReincidencia) {
-                  if (r.reincidencia!.includes("sem_devolucao") || r.reincidencia!.includes("mesmo_forn")) {
+                  const ri = r.reincidencia!;
+                  if (ri === "sim_sem_devolucao") {
                     reincLabel = "SEM devolucao";
                     reincColor = COLORS.errorFg;
-                  } else if (r.reincidencia!.includes("devolucao")) {
-                    reincLabel = "Com devolucao";
+                  } else if (ri === "sim_sem_devolucao_mesmo_forn") {
+                    reincLabel = "SEM devolucao (mesmo forn.)";
+                    reincColor = COLORS.errorFg;
+                  } else if (ri === "sim_com_devolucao_peca" || ri === "sim_devolucao") {
+                    reincLabel = "Devolucao da peca";
+                    reincColor = COLORS.successFg;
+                  } else if (ri === "sim_devolucao_outra_peca") {
+                    reincLabel = "Dev. outra peca";
                     reincColor = COLORS.warningFg;
-                  } else if (r.reincidencia!.includes("outro_forn")) {
-                    reincLabel = "Outro forn.";
+                  } else if (ri === "sim_mesmo_forn") {
+                    reincLabel = "Mesmo fornecedor";
+                    reincColor = COLORS.warningFg;
+                  } else if (ri === "sim_outro_forn") {
+                    reincLabel = "Outro fornecedor";
                     reincColor = COLORS.warningFg;
                   } else {
-                    reincLabel = r.reincidencia!;
+                    reincLabel = ri;
                     reincColor = COLORS.warningFg;
                   }
                 }
@@ -968,7 +1040,7 @@ export function ResultadosTable({ resultados }: Props) {
                     {isExpanded && (
                       <tr key={`${r.id}-detail`}>
                         <td colSpan={columns.length} style={{ padding: 0 }}>
-                          <DetalheOC r={r} />
+                          <DetalheOC r={r} ciliaMode={ciliaMode} ciliaBaseUrl={ciliaBaseUrl} />
                         </td>
                       </tr>
                     )}

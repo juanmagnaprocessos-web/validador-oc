@@ -35,6 +35,7 @@
   .tag.bloqueada { background: #fecaca; color: #991b1b; }
   .tag.aguardando_ml { background: #fef3c7; color: #92400e; }
   .tag.ja_processada { background: #e5e7eb; color: #374151; }
+  .tag.sem_card_pipefy { background: #ede9fe; color: #7c3aed; }
   .motivo { color: #b91c1c; font-size: 12px; }
   .right { text-align: right; }
   .mono { font-family: "SF Mono", Consolas, monospace; }
@@ -199,6 +200,8 @@
           <li{% if _eh_reinc %} class="reincidente"{% endif %} style="margin-bottom:4px;">
             <strong>{{ p.descricao or "(sem descrição)" }}</strong>
             {% if p.quantidade %} — qtd: {{ p.quantidade }}{% endif %}
+            {% if p.valor_unitario %} — R$ {{ "%.2f"|format(p.valor_unitario) }}/un{% endif %}
+            {% if p.valor_total %} (total: R$ {{ "%.2f"|format(p.valor_total) }}){% endif %}
             {% if p.ean %} <span style="color:#94a3b8;">[EAN {{ p.ean }}]</span>{% endif %}
             {% if _eh_reinc %}
               <br>
@@ -359,7 +362,7 @@
         <td>{{ cell_reincidencia(r.reincidencia, r.divergencias_cross) }}</td>
         <td>{{ cell_cancelamento(r.cancelamento, r.cancelamento_card_id) }}</td>
         {% if cilia_mode != 'off' %}<td>{{ cell_cilia(r.oc.identificador) }}</td>{% endif %}
-        <td><span class="tag {{ r.status.value }}">{{ {'aprovada':'Aprovada','divergencia':'Divergência','bloqueada':'Bloqueada','aguardando_ml':'ML — Manual','ja_processada':'Já processada'}[r.status.value] }}</span></td>
+        <td><span class="tag {{ r.status.value }}">{{ {'aprovada':'Aprovada','divergencia':'Divergência','bloqueada':'Bloqueada','aguardando_ml':'ML — Manual','ja_processada':'Já processada','sem_card_pipefy':'Sem card Pipefy'}[r.status.value] }}</span></td>
         <td>{{ acao_sugerida(r) }}</td>
         <td>
           {% set lk = link_card(r.card_pipefy_id) %}
@@ -370,6 +373,8 @@
             Fornecedor Mercado Livre — requer validação manual
           {%- elif r.status.value == 'ja_processada' -%}
             Card já estava em fase "{{ r.fase_pipefy_atual or '?' }}"
+          {%- elif r.status.value == 'sem_card_pipefy' -%}
+            OC sem card no Pipefy — requer criação manual
           {%- else -%}
             {{ r.motivo_resumido or "—" }}
           {%- endif -%}

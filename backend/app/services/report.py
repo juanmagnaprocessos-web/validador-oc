@@ -33,6 +33,8 @@ def _acao_sugerida(r: ResultadoValidacao) -> str:
         return "Aguardar análise ML"
     if s == StatusValidacao.JA_PROCESSADA:
         return "Já processada"
+    if s == StatusValidacao.SEM_CARD_PIPEFY:
+        return "Criar card no Pipefy"
     return "—"
 
 
@@ -171,6 +173,7 @@ def gerar_excel(
         "bloqueada": PatternFill("solid", fgColor="FECACA"),
         "aguardando_ml": PatternFill("solid", fgColor="FEF3C7"),
         "ja_processada": PatternFill("solid", fgColor="E5E7EB"),
+        "sem_card_pipefy": PatternFill("solid", fgColor="EDE9FE"),
     }
     status_label = {
         "aprovada": "Aprovada",
@@ -178,6 +181,7 @@ def gerar_excel(
         "bloqueada": "Bloqueada",
         "aguardando_ml": "Aguardando ML",
         "ja_processada": "Já processada",
+        "sem_card_pipefy": "Sem card Pipefy",
     }
 
     reinc_label_map = {
@@ -203,6 +207,8 @@ def gerar_excel(
         motivo = r.motivo_resumido
         if r.status == StatusValidacao.AGUARDANDO_ML:
             motivo = "Fornecedor Mercado Livre — validação manual do analista"
+        elif r.status == StatusValidacao.SEM_CARD_PIPEFY:
+            motivo = "OC sem card no Pipefy — requer criação manual"
         elif r.status == StatusValidacao.JA_PROCESSADA:
             motivo = f"Card já estava em fase '{r.fase_pipefy_atual or '?'}'"
         link_pipefy = _link_card(r.card_pipefy_id)

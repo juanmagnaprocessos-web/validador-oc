@@ -48,6 +48,8 @@ export function Dashboard() {
   const [resultados, setResultados] = useState<OcResultado[]>([]);
   const [historico, setHistorico] = useState<HistoricoItem[]>([]);
   const [tabView, setTabView] = useState<TabView>("todas");
+  const [ciliaMode, setCiliaMode] = useState<string>("off");
+  const [ciliaBaseUrl, setCiliaBaseUrl] = useState<string>("");
 
   // Filtrar resultados para revisao: OCs que requerem atenção do analista
   const resultadosRevisao = resultados.filter((r) => {
@@ -82,6 +84,8 @@ export function Dashboard() {
     try {
       const r = await validar(dataD1, dryRun);
       setUltima(r);
+      if (r.cilia_mode) setCiliaMode(r.cilia_mode);
+      if (r.cilia_base_url) setCiliaBaseUrl(r.cilia_base_url);
       const res = await getResultados(r.validacao_id);
       setResultados(res);
       await carregarHistorico();
@@ -331,7 +335,11 @@ export function Dashboard() {
 
       {/* Tabela de resultados */}
       <section style={{ marginTop: 4 }} aria-label="Resultados da validacao">
-        <ResultadosTable resultados={tabView === "revisao" ? resultadosRevisao : resultados} />
+        <ResultadosTable
+          resultados={tabView === "revisao" ? resultadosRevisao : resultados}
+          ciliaMode={ciliaMode}
+          ciliaBaseUrl={ciliaBaseUrl}
+        />
       </section>
 
       {/* Historico */}

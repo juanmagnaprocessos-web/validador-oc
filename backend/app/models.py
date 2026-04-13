@@ -19,6 +19,7 @@ class StatusValidacao(str, Enum):
     BLOQUEADA = "bloqueada"
     AGUARDANDO_ML = "aguardando_ml"      # Fornecedor Mercado Livre — requer validação manual
     JA_PROCESSADA = "ja_processada"      # Card já estava fora da fase "Validação" no Pipefy
+    SEM_CARD_PIPEFY = "sem_card_pipefy"  # OC do Club sem card correspondente no Pipefy
 
 
 class Severidade(str, Enum):
@@ -65,6 +66,8 @@ class ProdutoCotacao(BaseModel):
     quantidade: float = 0
     ean: str | None = None
     cod_interno: str | None = None
+    valor_unitario: Decimal | None = None   # unit_price do Club
+    valor_total: Decimal | None = None      # total_price do Club
 
 
 class Concorrente(BaseModel):
@@ -261,7 +264,11 @@ class OcOrfa(BaseModel):
     # com link para a OC anterior e link para o card de devolução, se houver.
     divergencias: list[Divergencia] = Field(default_factory=list)
     # Resumo simples de "houve reincidência cross-time?", para a coluna do relatório.
-    reincidencia: str = "—"   # "—" | "sim_devolucao" | "sim_mesmo_forn" | "sim_outro_forn"
+    # Resumo simples de "houve reincidência cross-time?", para a coluna do relatório.
+    # Valores possíveis: "—" | "sim_sem_devolucao" | "sim_sem_devolucao_mesmo_forn"
+    # | "sim_devolucao_outra_peca" | "sim_mesmo_forn" | "sim_outro_forn"
+    # | "sim_com_devolucao_peca"
+    reincidencia: str = "—"
     # Cancelamento detectado no pipe principal (fases Inf. Incorretas / Cancelados)
     cancelamento: str = "—"   # "—" | "info_incorretas" | "cancelado" | "ambos"
     cancelamento_card_id: str | None = None
@@ -270,7 +277,7 @@ class OcOrfa(BaseModel):
     produtos: list[ProdutoCotacao] = Field(default_factory=list)
     # Chaves de produto (mesma chave da R2) que são reincidentes — pré
     # computado pelo orchestrator para o template marcar visualmente.
-    chaves_reincidentes: list[str] = Field(default_factory=list)  # link clicável para o card
+    chaves_reincidentes: list[str] = Field(default_factory=list)
     # Todas as duplicidades históricas da placa (90d), incluindo peças que
     # NÃO estão nesta OC. Cada item é um dict com chave_produto, descricao,
     # total_ocorrencias, ids_pedido, datas_oc, fornecedores, status_devolucao.
@@ -313,8 +320,11 @@ class ResultadoValidacao(BaseModel):
     fase_pipefy_atual: str | None = None   # nome da fase em que o card estava no Pipefy
     validado_em: datetime = Field(default_factory=datetime.now)
     # Resumo da R2 cross-time (parte 2) — populado pelo orchestrator a
-    # partir das `divergencias` da R2 cross-time + cache de devoluções
-    reincidencia: str = "—"        # "—" | "sim_devolucao" | "sim_mesmo_forn" | "sim_outro_forn"
+    # partir das `divergencias` da R2 cross-time + cache de devoluções.
+    # Valores possíveis: "—" | "sim_sem_devolucao" | "sim_sem_devolucao_mesmo_forn"
+    # | "sim_devolucao_outra_peca" | "sim_mesmo_forn" | "sim_outro_forn"
+    # | "sim_com_devolucao_peca"
+    reincidencia: str = "—"
     # Cancelamento detectado no pipe principal (fases Inf. Incorretas / Cancelados)
     cancelamento: str = "—"        # "—" | "info_incorretas" | "cancelado" | "ambos"
     cancelamento_card_id: str | None = None

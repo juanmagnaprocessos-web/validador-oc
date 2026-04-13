@@ -64,6 +64,8 @@ async def validar(
             "dry_run": dry_run,
             "relatorio_html": str(html_path.name),
             "relatorio_xlsx": str(xlsx_path.name),
+            "cilia_mode": settings.cilia_mode,
+            "cilia_base_url": settings.cilia_base_url,
         }
 
 
