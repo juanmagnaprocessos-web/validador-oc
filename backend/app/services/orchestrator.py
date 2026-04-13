@@ -794,24 +794,58 @@ async def _atuar_no_pipefy(
 
     is_auto = settings.modo_operacao == "automatico"
 
+    # Mapeamento chave interna → label do campo no Pipefy (para comparar
+    # valor atual do card e evitar mutations desnecessárias).
+    _CAMPO_LABEL: dict[str, str] = {
+        "peca_duplicada": "Peça duplicada?",
+        "abatimento_fornecedor": "Abatimento fornecedor?",
+        "validacao_concluida_por": "Validação da Oc concluída por:",
+        "validacao_concluida": "Validação concluída?",
+        "justificativa_divergencia": "Informe a negativa da validação",
+    }
+
+    def _campo_ja_igual(campo_chave: str, valor_novo: str) -> bool:
+        """Retorna True se o valor atual do card já é igual ao desejado."""
+        label = _CAMPO_LABEL.get(campo_chave)
+        if not label or not resultado.card_campos:
+            return False
+        valor_atual = str(resultado.card_campos.get(label) or "").strip()
+        return valor_atual == str(valor_novo).strip()
+
     # Lista de ações planejadas: (acao, payload_dict, motivo)
-    acoes: list[tuple[str, dict[str, Any], str | None]] = [
-        ("update_field", {"campo": "peca_duplicada", "valor": resultado.peca_duplicada}, None),
-        ("update_field", {"campo": "abatimento_fornecedor", "valor": resultado.abatimento_fornecedor}, None),
-        ("update_field", {"campo": "validacao_concluida_por", "valor": settings.validador_identificador}, None),
-        ("update_field", {"campo": "validacao_concluida", "valor": "Sim" if resultado.aprovada else "Não"}, None),
-    ]
+    acoes: list[tuple[str, dict[str, Any], str | None]] = []
+    campos_skipped = 0
+
+    for campo, valor in [
+        ("peca_duplicada", resultado.peca_duplicada),
+        ("abatimento_fornecedor", resultado.abatimento_fornecedor),
+        ("validacao_concluida_por", settings.validador_identificador),
+        ("validacao_concluida", "Sim" if resultado.aprovada else "Não"),
+    ]:
+        if _campo_ja_igual(campo, valor):
+            campos_skipped += 1
+        else:
+            acoes.append(("update_field", {"campo": campo, "valor": valor}, None))
 
     if resultado.divergencias:
         texto = "\n".join(
             f"[{d.regra}] {d.titulo}: {d.descricao}"
             for d in resultado.divergencias
         )
-        acoes.append((
-            "update_field",
-            {"campo": "justificativa_divergencia", "valor": texto},
-            "registrar divergências no card",
-        ))
+        if not _campo_ja_igual("justificativa_divergencia", texto):
+            acoes.append((
+                "update_field",
+                {"campo": "justificativa_divergencia", "valor": texto},
+                "registrar divergências no card",
+            ))
+        else:
+            campos_skipped += 1
+
+    if campos_skipped:
+        logger.info(
+            "Card %s: %d campo(s) já com valor correto — skip mutation",
+            resultado.card_pipefy_id, campos_skipped,
+        )
 
     if resultado.fase_destino:
         chave = FASE_ENUM_PARA_CHAVE.get(resultado.fase_destino)
@@ -963,23 +997,86 @@ async def _executar_validacao_impl(
             if placa_norm:
                 ocs_por_placa.setdefault(placa_norm, []).append((id_pedido, raw))
 
-        # 2. Listar TODOS os cards do pipe principal (todas as fases
-        # historicas) UMA vez — isso substitui o backfill do Club para
-        # a R2 cross-time e serve ao mesmo tempo como base para filtrar
-        # cards do D-1 por `created_at`.
-        #
-        # Cobre: validacao, aguardar_pecas, programar_pagamento,
-        # compras_ml, informacoes_incorretas, cancelados (vide
-        # PipefyClient.FASES_HISTORICO_PRINCIPAL).
+        # 2a. Listar fases de cancelamento ANTES de listar_todos para
+        # evitar buscar essas fases duas vezes (economiza tokens Pipefy).
+        # Os cards brutos são reaproveitados no índice R2 logo abaixo.
+        _canc_cache_dicts: list[dict[str, Any]] = []
+        _canc_raw_cards: list[CardPipefy] = []
+        _skip_fases: set[str] = set()
+        if settings.r2_modo != "off":
+            try:
+                result = await pipefy.listar_cards_cancelamento_pipe_principal(
+                    return_raw_cards=True,
+                )
+                _canc_cache_dicts, _canc_raw_cards = result  # type: ignore[misc]
+                atualizar_cache_cancelamentos(_canc_cache_dicts)
+                # Pular estas fases em listar_todos — já temos os cards
+                _skip_fases = set(settings.fases_cancelamento_list)
+            except Exception as e:
+                logger.error("Falha ao listar cancelamentos (pre-fetch): %s", e)
+
+        # 2b. Listar cards das DEMAIS fases do pipe principal (historico
+        # para R2 cross-time + base para filtrar cards do D-1).
+        # As fases de cancelamento são puladas se já listadas acima.
         todos_cards: list[CardPipefy] = (
-            await pipefy.listar_todos_cards_pipe_principal()
+            await pipefy.listar_todos_cards_pipe_principal(
+                skip_fases=_skip_fases or None,
+            )
         )
+
+        # 2c. Merge: incorporar cards de cancelamento no índice histórico
+        # para manter a cobertura R2 completa (sem perder nenhum card).
+        if _canc_raw_cards:
+            vistos_ids = {c.id for c in todos_cards}
+            merged = 0
+            for c in _canc_raw_cards:
+                if c.id not in vistos_ids:
+                    todos_cards.append(c)
+                    vistos_ids.add(c.id)
+                    merged += 1
+            if merged:
+                logger.info(
+                    "Pipefy: %d cards de cancelamento mergeados no índice histórico",
+                    merged,
+                )
+        elif not _canc_cache_dicts and not _skip_fases:
+            # Fallback: pre-fetch de cancelamentos falhou, mas listar_todos
+            # listou todas as 12 fases. Extrair cards de cancelamento de
+            # todos_cards para atualizar o cache (evita cache stale).
+            fases_cancel = set(settings.fases_cancelamento_list)
+            canc_fallback: list[dict[str, Any]] = []
+            for c in todos_cards:
+                if c.phase_name and c.phase_name in fases_cancel:
+                    placa_norm = (
+                        (c.title or "").replace("-", "").replace(" ", "").upper()
+                    )
+                    if placa_norm:
+                        tipo = (
+                            "informacoes_incorretas"
+                            if c.phase_name == "Informações Incorretas"
+                            else "cancelado"
+                        )
+                        canc_fallback.append({
+                            "placa_normalizada": placa_norm,
+                            "card_id": str(c.id),
+                            "tipo": tipo,
+                            "fase_atual": c.phase_name,
+                            "descricao_pecas": c.descricao_pecas,
+                            "codigo_oc": c.codigo_oc,
+                        })
+            if canc_fallback:
+                atualizar_cache_cancelamentos(canc_fallback)
+                logger.info(
+                    "Cache cancelamentos atualizado via fallback: %d cards",
+                    len(canc_fallback),
+                )
+
         logger.info(
             "Pipefy: %d cards historicos lidos (pipe principal)",
             len(todos_cards),
         )
 
-        # 2b. Construir indice placa_normalizada -> [CardPipefy] UMA vez.
+        # 2d. Construir indice placa_normalizada -> [CardPipefy] UMA vez.
         # Sera reusado por `_buscar_historico_placa_pipefy` para cada OC
         # sendo validada, eliminando queries repetidas ao Pipefy.
         indice_cards_historicos = pipefy.indexar_cards_por_placa(todos_cards)
@@ -1300,23 +1397,14 @@ async def _executar_validacao_impl(
                     inseridas, len(linhas_d1),
                 )
 
-        # Caches de devolucoes/cancelamentos SEMPRE precisam rodar
-        # (ambos os modos dependem deles para enriquecer as divergencias).
+        # Cache de devoluções — sempre precisa rodar para enriquecer divergências.
+        # (Cache de cancelamentos já foi atualizado no passo 2a acima.)
         if settings.r2_modo != "off":
-            # Atualizar cache de devoluções a partir do pipe Devolução
             try:
                 devs = await pipefy.listar_devolucoes_abertas()
                 atualizar_cache_devolucoes(devs)
             except Exception as e:
                 logger.error("Falha ao atualizar cache de devoluções: %s", e)
-
-            # Atualizar cache de cancelamentos do PIPE PRINCIPAL
-            # (fases Informações Incorretas + Cancelados)
-            try:
-                cancs = await pipefy.listar_cards_cancelamento_pipe_principal()
-                atualizar_cache_cancelamentos(cancs)
-            except Exception as e:
-                logger.error("Falha ao atualizar cache de cancelamentos: %s", e)
 
         # 4d.1 — Pre-calcular o historico indexado via Pipefy PARA CADA
         # placa que sera validada (cards do dia + orfãs). Carregamos a
@@ -1806,6 +1894,7 @@ async def _executar_validacao_impl(
                     chaves_reincidentes=chaves_reinc,
                     forma_pagamento_canonica=forma_canon,
                     duplicidades_placa=dups_placa_card,
+                    card_campos=card.campos if card else {},
                 )
             )
 
