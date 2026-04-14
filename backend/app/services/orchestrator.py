@@ -1161,8 +1161,110 @@ async def _executar_validacao_impl(
             else:
                 cards_sem_match_direto.append(card)
 
+        # --- Fase 1.5: descartar cards cujo codigo_oc aponta para OC de
+        # outro dia no Club. Cenario: comprador gera OC no Club em DD-N
+        # mas so cria o card no Pipefy em D-1 (lancamento atrasado de N
+        # dias). Esses cards NAO devem entrar no batch atual — ja foram
+        # (ou serao) tratados na rodada da data correta. O sistema gera
+        # log de auditoria para o analista rodar `validar --data DD-N`.
+        # Conversao de timezone: o Club retorna `data_pedido` em UTC; converter
+        # para America/Sao_Paulo antes de comparar com data_d1 (data local).
+        from zoneinfo import ZoneInfo
+        _TZ_SP = ZoneInfo("America/Sao_Paulo")
+
+        def _parse_data_sp(v: Any) -> date | None:
+            """Igual a _parse_data, mas converte timezone aware p/ SP antes
+            do .date(). Evita descarte indevido de OCs do D-1 noite."""
+            if not v:
+                return None
+            if isinstance(v, date) and not isinstance(v, datetime):
+                return v
+            s = str(v).strip()
+            try:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(_TZ_SP)
+                return dt.date()
+            except ValueError:
+                return _parse_data(v)
+
+        # Sentinela para distinguir "falha de rede" de "sem codigo_oc".
+        # date.min nao pode aparecer naturalmente em data_pedido — uso seguro.
+        _FAIL = date.min
+
+        cards_descartados_outro_dia: list[tuple[CardPipefy, date]] = []
+        cards_falha_lookup: list[CardPipefy] = []
+        cards_para_fallback: list[CardPipefy] = []
+
+        async def _data_oc_no_club(
+            card: CardPipefy,
+        ) -> tuple[CardPipefy, date | None]:
+            codigo = (card.codigo_oc or "").strip()
+            if not codigo:
+                return card, None
+            async with semaforo:
+                try:
+                    det = await club.get_order_details(codigo)
+                except Exception as e:
+                    logger.warning(
+                        "Fase 1.5: falha get_order_details OC %s "
+                        "(card %s, placa=%s): %s — card MANTIDO no "
+                        "fallback (nao descartado por seguranca)",
+                        codigo, card.id, card.title, e,
+                    )
+                    return card, _FAIL
+            data_raw = (
+                det.get("data_pedido") or det.get("generation_date") or ""
+            )
+            return card, _parse_data_sp(data_raw)
+
+        cards_com_codigo = [
+            c for c in cards_sem_match_direto
+            if (c.codigo_oc or "").strip()
+        ]
+        cards_sem_codigo = [
+            c for c in cards_sem_match_direto
+            if not (c.codigo_oc or "").strip()
+        ]
+        if cards_com_codigo:
+            datas_oc = await asyncio.gather(
+                *[_data_oc_no_club(c) for c in cards_com_codigo]
+            )
+            for card, data_oc in datas_oc:
+                if data_oc is _FAIL:
+                    # Falha de rede — manter no fallback (fail-safe)
+                    cards_falha_lookup.append(card)
+                    cards_para_fallback.append(card)
+                elif data_oc and data_oc != data_d1:
+                    cards_descartados_outro_dia.append((card, data_oc))
+                    logger.warning(
+                        "Card %s (placa=%s, codigo_oc=%s) DESCARTADO do "
+                        "batch de %s: OC referenciada e do dia %s. "
+                        "Lancamento atrasado — rodar `validar --data %s` "
+                        "para validar OCs daquele dia.",
+                        card.id, card.title, card.codigo_oc,
+                        data_d1, data_oc, data_oc,
+                    )
+                else:
+                    cards_para_fallback.append(card)
+        cards_para_fallback.extend(cards_sem_codigo)
+
+        if cards_descartados_outro_dia:
+            datas_unicas = sorted({d.isoformat() for _, d in cards_descartados_outro_dia})
+            logger.info(
+                "Fase 1.5: %d cards descartados (lancamento atrasado) — "
+                "datas das OCs referenciadas: %s",
+                len(cards_descartados_outro_dia), datas_unicas,
+            )
+        if cards_falha_lookup:
+            logger.warning(
+                "Fase 1.5: %d cards com falha no lookup get_order_details — "
+                "mantidos no fallback (fail-safe). Verificar logs detalhados.",
+                len(cards_falha_lookup),
+            )
+
         # --- Fase 2: fallback por placa para os cards restantes
-        for card in cards_sem_match_direto:
+        for card in cards_para_fallback:
             raw = None
             placa_card_norm = PipefyClient._normalizar_placa(card.title or "")
             if placa_card_norm:
@@ -1589,6 +1691,126 @@ async def _executar_validacao_impl(
                     "(%d items totais agora)",
                     total_club_merged,
                     sum(len(v) for v in historico_items_por_placa.values()),
+                )
+
+            # 3a FONTE DE HISTORICO: cache de devolucoes (pipe 305658860).
+            # Cobre OCs antigas que: (a) ja sairam do pipe principal e
+            # (b) nao tem placa indexada na API v3 do Club (request.obs vazio).
+            # Para cada placa do batch, busca devolucoes locais; para cada n_oc,
+            # carrega items reais via get_order_details (com EAN/codigo) — assim
+            # a chave_produto bate com a OC atual e o R2 detecta a duplicidade.
+            sem_dev = asyncio.Semaphore(concorrencia)
+
+            async def _historico_via_devolucoes(
+                placa: str,
+            ) -> tuple[str, list[dict[str, Any]]]:
+                """Retorna items do historico via cache_devolucoes,
+                enriquecidos com get_order_details para ter EAN/codigo.
+                Dedup por (id_pedido, chave_produto) — alinhado com o merge
+                Club, permite complementar items quando a OC ja existe em
+                outra fonte mas com subset de pecas diferente."""
+                devs = get_devolucoes_por_placa(placa)
+                if not devs:
+                    return placa, []
+                # Set (id_pedido, chave_produto) ja presente no historico
+                ja_no_hist: set[tuple[str, str]] = {
+                    (
+                        str(it.get("id_pedido") or "").strip(),
+                        it.get("chave_produto") or "",
+                    )
+                    for it in historico_items_por_placa.get(placa, [])
+                }
+                novos_items: list[dict[str, Any]] = []
+                for d in devs:
+                    n_oc = (d.get("n_oc") or "").strip()
+                    if not n_oc:
+                        continue
+                    async with sem_dev:
+                        try:
+                            det = await club.get_order_details(n_oc)
+                        except Exception as e:
+                            logger.debug(
+                                "cache_devolucoes: falha get_order_details "
+                                "OC %s placa %s: %s", n_oc, placa, e,
+                            )
+                            continue
+                    forn = det.get("fornecedor") or {}
+                    forn_id = str(
+                        forn.get("for_id") or det.get("for_id") or ""
+                    ) or None
+                    forn_nome = (
+                        forn.get("for_nome")
+                        or det.get("fornecedor_nome")
+                    )
+                    data_oc_iso = ""
+                    data_raw = (
+                        det.get("data_pedido")
+                        or det.get("generation_date")
+                        or ""
+                    )
+                    if data_raw:
+                        parsed = _parse_data(data_raw)
+                        if parsed:
+                            data_oc_iso = parsed.isoformat()
+                    for item in det.get("items") or []:
+                        product = item.get("product") or {}
+                        desc_raw = (
+                            product.get("name")
+                            or item.get("descricao")
+                            or ""
+                        )
+                        chave = chave_produto(
+                            ean=product.get("ean"),
+                            codigo=product.get("internal_code"),
+                            descricao=desc_raw,
+                        )
+                        # Dedup fino: pular item se essa OC ja contribuiu com
+                        # essa peca no historico via outra fonte (Pipefy/Club)
+                        if (n_oc, chave) in ja_no_hist:
+                            continue
+                        desc_norm = (
+                            desc_raw.strip().lower() if desc_raw else ""
+                        )
+                        novos_items.append({
+                            "id_pedido": n_oc,
+                            "id_cotacao": str(
+                                det.get("id_cotacao") or ""
+                            ) or None,
+                            "data_oc": data_oc_iso,
+                            "identificador": placa,
+                            "placa_normalizada": placa,
+                            "chave_produto": chave,
+                            "descricao": desc_raw,
+                            "descricao_normalizada": desc_norm,
+                            "fornecedor_id": forn_id,
+                            "fornecedor_nome": forn_nome,
+                            "quantidade": float(item.get("quantity") or 0),
+                            "card_pipefy_id": d.get("card_id"),
+                            "fonte_historico": "cache_devolucoes",
+                        })
+                return placa, novos_items
+
+            try:
+                resultados_dev = await asyncio.gather(
+                    *[_historico_via_devolucoes(p) for p in placas_unicas]
+                )
+                total_dev_merged = 0
+                for placa, items in resultados_dev:
+                    if not items:
+                        continue
+                    historico_items_por_placa.setdefault(placa, []).extend(items)
+                    total_dev_merged += len(items)
+                if total_dev_merged:
+                    logger.info(
+                        "cache_devolucoes: %d items adicionados ao historico "
+                        "R2 (cobre OCs sem card no pipe principal e sem "
+                        "placa indexada no Club)",
+                        total_dev_merged,
+                    )
+            except Exception as e:
+                logger.error(
+                    "Falha ao mergear cache_devolucoes no historico R2: %s",
+                    e,
                 )
 
         # 4d.2 — INJETAR items do D-1 atual no historico para detecção
