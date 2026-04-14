@@ -714,7 +714,13 @@ async def _coletar_para_card(
         if not oc_basico.valor_pedido:
             oc_basico.valor_pedido = _to_decimal(detalhes.get("value"))
         if not oc_basico.items and detalhes.get("items"):
-            oc_basico = _parse_oc({**raw_oc, **detalhes})
+            # Aplica aliases v3 (seller->fornecedor, generation_date->data_pedido)
+            # no merge antes do reparse. Sem isso, OCs atipicas cujo v1 nao traz
+            # items/fornecedor inline ficam com fornecedor=None e data_pedido=None,
+            # disparando R5 e R6 falso-positivos.
+            oc_basico = _parse_oc(
+                ClubClient._normalizar_pedido_v3({**raw_oc, **detalhes})
+            )
 
     concorrentes = [
         Concorrente(
