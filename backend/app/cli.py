@@ -100,7 +100,10 @@ async def cmd_validar(args: argparse.Namespace) -> int:
             "aprovada": "[green]✅ Aprovada[/green]",
             "divergencia": "[yellow]⚠️ Divergência[/yellow]",
             "bloqueada": "[red]❌ Bloqueada[/red]",
-        }[r.status.value]
+            "ja_processada": "[blue]Já processada[/blue]",
+            "aguardando_ml": "[magenta]Aguardando ML[/magenta]",
+            "sem_card_pipefy": "[cyan]Sem card[/cyan]",
+        }.get(r.status.value, f"[white]{r.status.value}[/white]")
         tbl.add_row(
             r.oc.identificador or "—",
             (forn[:24] + "…") if len(forn) > 25 else forn,

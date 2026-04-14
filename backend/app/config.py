@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     pipefy_pipe_devolucao_id: int = Field(
         305658860, alias="PIPEFY_PIPE_DEVOLUCAO_ID"
     )
+    # Tamanho da página para queries de listagem (cards por request).
+    # Pipefy aceita até 100; valor maior = menos chamadas API.
+    pipefy_page_size: int = Field(100, ge=1, le=100, alias="PIPEFY_PAGE_SIZE")
 
     # --- Cilia ---
     # Modos disponíveis:

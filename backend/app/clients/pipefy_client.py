@@ -203,7 +203,7 @@ class PipefyClient:
         while True:
             data = await self._gql(
                 self.LIST_CARDS_QUERY,
-                {"phaseId": phase_id, "first": 50, "after": after},
+                {"phaseId": phase_id, "first": settings.pipefy_page_size, "after": after},
             )
             phase = data.get("phase") or {}
             conn = phase.get("cards") or {}
@@ -225,6 +225,7 @@ class PipefyClient:
         self,
         *,
         max_cards_por_fase: int = 1000,
+        skip_fases: set[str] | None = None,
     ) -> list[CardPipefy]:
         """Lista cards de TODAS as fases do pipe principal (historico
         completo para R2 cross-time).
@@ -241,6 +242,9 @@ class PipefyClient:
 
         Args:
             max_cards_por_fase: limite de seguranca por fase.
+            skip_fases: nomes de fases a pular (já listadas em outro
+                momento, ex: cancelamentos). Os cards dessas fases devem
+                ser adicionados ao resultado pelo chamador.
 
         Returns:
             Lista consolidada de cards (deduplicada por id).
@@ -249,6 +253,7 @@ class PipefyClient:
         todos: list[CardPipefy] = []
         vistos: set[str] = set()
         fases_consultadas = 0
+        fases_skipped = 0
 
         # Iterar sobre TODAS as fases do pipe (dict phases do json)
         for phase_name, phase_info in ids.phases.items():
@@ -256,6 +261,15 @@ class PipefyClient:
             if not phase_id:
                 logger.warning(
                     "Fase '%s' sem id em pipefy_ids.json — pulada", phase_name
+                )
+                continue
+            if skip_fases and any(
+                _norm_label(phase_name) == _norm_label(sf) for sf in skip_fases
+            ):
+                fases_skipped += 1
+                logger.debug(
+                    "Pipefy historico: fase '%s' PULADA (skip_fases)",
+                    phase_name,
                 )
                 continue
             try:
@@ -280,8 +294,9 @@ class PipefyClient:
             )
 
         logger.info(
-            "Pipefy: %d cards historicos lidos em %d fases do pipe principal",
-            len(todos), fases_consultadas,
+            "Pipefy: %d cards historicos lidos em %d fases do pipe principal"
+            " (%d fases puladas via skip_fases)",
+            len(todos), fases_consultadas, fases_skipped,
         )
         return todos
 
@@ -510,7 +525,9 @@ class PipefyClient:
 
     async def listar_cards_cancelamento_pipe_principal(
         self,
-    ) -> list[dict[str, Any]]:
+        *,
+        return_raw_cards: bool = False,
+    ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], list["CardPipefy"]]:
         """Varre as duas fases de cancelamento do pipe principal e
         retorna uma lista de dicts no formato esperado por
         `db.atualizar_cache_cancelamentos`:
@@ -526,8 +543,14 @@ class PipefyClient:
         chaves `informacoes_incorretas` e `cancelados` do pipefy_ids.
         A placa vem do `card.title` (já normalizado, sem hífen) com
         fallback defensivo de remover hífen/espaço/upper.
+
+        Se `return_raw_cards=True`, retorna uma tupla
+        ``(dicts_para_cache, cards_brutos)`` para que o chamador possa
+        reaproveitar os CardPipefy no índice histórico sem precisar
+        re-listar estas fases.
         """
         out: list[dict[str, Any]] = []
+        raw_cards: list[CardPipefy] = []
         for tipo, chave in (
             ("informacoes_incorretas", "informacoes_incorretas"),
             ("cancelado", "cancelados"),
@@ -539,6 +562,8 @@ class PipefyClient:
                     "Falha ao listar fase %s do pipe principal: %s", chave, e
                 )
                 continue
+            if return_raw_cards:
+                raw_cards.extend(cards)
             for c in cards:
                 placa_norm = (
                     (c.title or "").replace("-", "").replace(" ", "").upper()
@@ -560,6 +585,8 @@ class PipefyClient:
             "(informacoes_incorretas + cancelados)",
             len(out),
         )
+        if return_raw_cards:
+            return out, raw_cards
         return out
 
     # ---------- pipe de Devolução de Peças ----------
@@ -630,7 +657,7 @@ class PipefyClient:
         while True:
             data = await self._gql(
                 self.LIST_PIPE_CARDS_QUERY,
-                {"pipeId": str(pid), "first": 50, "after": after},
+                {"pipeId": str(pid), "first": settings.pipefy_page_size, "after": after},
             )
             conn_data = data.get("cards") or {}
             for edge in conn_data.get("edges") or []:

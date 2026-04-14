@@ -348,6 +348,9 @@ class ResultadoValidacao(BaseModel):
     # NÃO estão nesta OC. Cada item é um dict com chave_produto, descricao,
     # total_ocorrencias, ids_pedido, datas_oc, fornecedores, status_devolucao.
     duplicidades_placa: list[dict] = Field(default_factory=list)
+    # Campos atuais do card Pipefy (dict label→valor). Usado por
+    # _atuar_no_pipefy para evitar mutations quando o valor já é o desejado.
+    card_campos: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def aprovada(self) -> bool:
