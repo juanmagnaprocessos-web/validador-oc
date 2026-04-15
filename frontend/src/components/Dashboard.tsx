@@ -48,6 +48,7 @@ export function Dashboard() {
   const [resultados, setResultados] = useState<OcResultado[]>([]);
   const [historico, setHistorico] = useState<HistoricoItem[]>([]);
   const [tabView, setTabView] = useState<TabView>("todas");
+  const [downloadando, setDownloadando] = useState<"html" | "excel" | null>(null);
   const [ciliaMode, setCiliaMode] = useState<string>("off");
   const [ciliaBaseUrl, setCiliaBaseUrl] = useState<string>("");
 
@@ -101,7 +102,9 @@ export function Dashboard() {
   }
 
   async function baixarRelatorio(data: string, tipo: "html" | "excel") {
+    if (downloadando) return;
     setErro(null);
+    setDownloadando(tipo);
     try {
       const url =
         tipo === "html" ? urlRelatorioHtml(data) : urlRelatorioExcel(data);
@@ -129,6 +132,8 @@ export function Dashboard() {
         return;
       }
       setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadando(null);
     }
   }
 
@@ -229,20 +234,32 @@ export function Dashboard() {
             <button
               type="button"
               onClick={() => baixarRelatorio(ultima.data_d1, "html")}
-              style={btnSecondary}
+              disabled={downloadando !== null}
+              style={{
+                ...btnSecondary,
+                opacity: downloadando !== null ? 0.6 : 1,
+                cursor: downloadando !== null ? "not-allowed" : "pointer",
+              }}
               aria-label="Abrir relatorio HTML em nova aba"
+              aria-busy={downloadando === "html"}
               title="Abrir relatorio completo em nova aba"
             >
-              Ver HTML
+              {downloadando === "html" ? "Gerando..." : "Ver HTML"}
             </button>
             <button
               type="button"
               onClick={() => baixarRelatorio(ultima.data_d1, "excel")}
-              style={btnSecondary}
+              disabled={downloadando !== null}
+              style={{
+                ...btnSecondary,
+                opacity: downloadando !== null ? 0.6 : 1,
+                cursor: downloadando !== null ? "not-allowed" : "pointer",
+              }}
               aria-label="Baixar relatorio Excel com cards e orfas"
+              aria-busy={downloadando === "excel"}
               title="Baixar planilha com 2 abas: Cards (validacao completa) + OCs sem card no Pipefy"
             >
-              Baixar Excel
+              {downloadando === "excel" ? "Gerando..." : "Baixar Excel"}
             </button>
           </>
         )}

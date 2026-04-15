@@ -27,9 +27,11 @@ export interface ValidarResponse {
   dry_run: boolean;
   relatorio_html: string;
   relatorio_xlsx: string;
-  cilia_mode?: string;
+  cilia_mode?: CiliaMode;
   cilia_base_url?: string;
 }
+
+export type CiliaMode = "off" | "deeplink" | "http" | "stub";
 
 export interface DivergenciaCompleta {
   regra: string;
@@ -109,8 +111,8 @@ export interface HistoricoEntry {
   aprovadas: number;
   divergentes: number;
   bloqueadas: number;
-  aguardando_ml: number | null;
-  ja_processadas: number | null;
+  aguardando_ml: number;
+  ja_processadas: number;
   status: string;
   dry_run: number;
   executado_por: string | null;

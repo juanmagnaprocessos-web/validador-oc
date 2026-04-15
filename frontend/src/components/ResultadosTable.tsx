@@ -271,9 +271,10 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                 const chave = _ean ? `ean:${_ean}` : _cod ? `cod:${_cod}` : _desc ? `desc:${_desc}` : "";
                 const isReincidente = pecasReincidentes.has(chave);
                 const divPeca = divR2.find((d) => d.dados?.chave_produto === chave);
+                const rowKey = chave || `idx-${i}`;
                 return (
                   <tr
-                    key={i}
+                    key={rowKey}
                     style={{
                       borderTop: "1px solid #cbd5e1",
                       background: isReincidente ? "#fef2f2" : i % 2 === 0 ? "#ffffff" : "#f8fafc",
@@ -339,7 +340,10 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
               Reincidencias Detectadas ({divR2.length})
             </SectionTitle>
             {divR2.map((d, i) => (
-              <ReincidenciaCard key={i} div={d} />
+              <ReincidenciaCard
+                key={`${d.regra}-${d.dados?.chave_produto ?? d.titulo}-${i}`}
+                div={d}
+              />
             ))}
           </>
         )}
@@ -377,7 +381,10 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
           <>
             <SectionTitle>Outras Divergencias ({divOutras.length})</SectionTitle>
             {divOutras.map((d, i) => (
-              <DivergenciaCard key={i} div={d} />
+              <DivergenciaCard
+                key={`${d.regra}-${d.dados?.chave_produto ?? d.titulo}-${i}`}
+                div={d}
+              />
             ))}
           </>
         )}
