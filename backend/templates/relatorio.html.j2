@@ -2,92 +2,362 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Validação OC — {{ data_d1 }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --brand-navy: #2c3464;
+    --brand-red: #c53542;
+    --navy-accent: #3d4a8a;
+    --font-sans: "Inter Tight", -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.32);
+    --shadow-md: 0 4px 12px rgba(0,0,0,.32);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,.42);
+    /* Dark (padrão) */
+    --bg-base: #0f1419;
+    --surface: #1a2332;
+    --surface-alt: #141b26;
+    --surface-hover: #22304a;
+    --border: #2d3a52;
+    --border-row: #222d42;
+    --text-primary: #e6ebf5;
+    --text-secondary: #9fa8b8;
+    --text-muted: #6b7689;
+    --accent: #c53542;
+    --accent-hover: #d84451;
+    --accent-dim: #c5354220;
+    --link: #6aa5ff;
+    --link-hover: #8ebaff;
+    --success: #4ade80;
+    --success-bg: #0f3d2a;
+    --success-fg: #86efac;
+    --warning: #fbbf24;
+    --warning-amber: #fb923c;
+    --warning-bg: #3d2c0a;
+    --warning-fg: #fde68a;
+    --danger: #ef4444;
+    --danger-bg: #3d1518;
+    --danger-fg: #fca5a5;
+    --info: #3b82f6;
+    --info-bg: #12213d;
+    --info-fg: #93c5fd;
+  }
+
+  [data-theme="light"] {
+    --bg-base: #f4f6fa;
+    --surface: #ffffff;
+    --surface-alt: #fafbfd;
+    --surface-hover: #eef2ff;
+    --border: #d4dae8;
+    --border-row: #eef1f5;
+    --text-primary: #1a2332;
+    --text-secondary: #5a6c7f;
+    --text-muted: #8892a6;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.06);
+    --shadow-md: 0 2px 8px rgba(0,0,0,.08);
+    --shadow-lg: 0 6px 20px rgba(0,0,0,.10);
+    --link: #2563eb;
+    --link-hover: #1d4ed8;
+    --success: #16a34a;
+    --success-bg: #d1fae5;
+    --success-fg: #065f46;
+    --warning: #ea580c;
+    --warning-amber: #d97706;
+    --warning-bg: #fed7aa;
+    --warning-fg: #9a3412;
+    --danger: #dc2626;
+    --danger-bg: #fee2e2;
+    --danger-fg: #991b1b;
+    --info: #2563eb;
+    --info-bg: #dbeafe;
+    --info-fg: #1e40af;
+  }
+
   * { box-sizing: border-box; }
+  html { color-scheme: dark light; }
   body {
-    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-family: var(--font-sans);
     margin: 0;
     padding: 24px;
-    background: #f4f6fa;
-    color: #1a2332;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    letter-spacing: -0.005em;
   }
-  h1 { margin: 0 0 8px; font-size: 24px; }
-  .sub { color: #5a6c7f; margin-bottom: 24px; }
+
+  /* Header do relatório com toggle */
+  .report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid var(--border);
+  }
+  .report-header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; color: var(--text-primary); }
+  .report-header .meta-inline { color: var(--text-secondary); font-size: 12px; margin: 0; }
+  .report-header .meta-inline strong { color: var(--text-primary); }
+  #theme-toggle {
+    cursor: pointer;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  #theme-toggle:hover { background: var(--surface-hover); border-color: var(--navy-accent); color: var(--text-primary); }
+
+  /* Resumo executivo */
+  .executive-summary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--brand-red);
+    border-radius: var(--radius-lg);
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-sm);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-primary);
+  }
+  .executive-summary .ok { color: var(--success); font-weight: 600; }
+  .executive-summary .warn { color: var(--warning); font-weight: 600; }
+  .executive-summary .err { color: var(--danger); font-weight: 600; }
+  .executive-summary .ml { color: var(--warning-amber); font-weight: 600; }
+  .executive-summary .muted { color: var(--text-muted); }
+
+  /* Sumário com âncoras */
+  nav.toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+  }
+  nav.toc a {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  nav.toc a:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-dim); }
+
+  h1 { margin: 0 0 8px; font-size: 22px; font-weight: 700; }
+  h2 { margin: 24px 0 10px; font-size: 16px; font-weight: 600; color: var(--text-primary); }
+  .sub { color: var(--text-secondary); margin-bottom: 20px; }
+
   .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 24px; }
-  .card { background: white; border-radius: 8px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .card .num { font-size: 28px; font-weight: 700; margin: 4px 0; }
-  .card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #5a6c7f; }
-  .card.ok .num { color: #17a34a; }
-  .card.warn .num { color: #ea580c; }
-  .card.err .num { color: #dc2626; }
-  .card.ml .num { color: #d97706; }
-  .card.muted .num { color: #6b7280; }
-  table { width: 100%; background: white; border-collapse: collapse; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  th { background: #1a2332; color: white; text-align: left; padding: 14px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
-  td { padding: 12px 14px; border-top: 1px solid #eef1f5; font-size: 13px; vertical-align: top; }
-  tr:nth-child(4n+1) td { background: #ffffff; }
-  tr:nth-child(4n+3) td { background: #f9fafb; }
-  tr:hover td { background: #eef2ff; }
-  .tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
-  .tag.aprovada { background: #d1fae5; color: #065f46; }
-  .tag.divergencia { background: #fed7aa; color: #9a3412; }
-  .tag.bloqueada { background: #fecaca; color: #991b1b; }
-  .tag.aguardando_ml { background: #fef3c7; color: #92400e; }
-  .tag.ja_processada { background: #e5e7eb; color: #374151; }
-  .tag.sem_card_pipefy { background: #ede9fe; color: #7c3aed; }
-  .motivo { color: #b91c1c; font-size: 12px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .card .num { font-size: 28px; font-weight: 700; margin: 4px 0; color: var(--text-primary); }
+  .card .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-secondary); font-weight: 500; }
+  .card.ok .num { color: var(--success); }
+  .card.warn .num { color: var(--warning); }
+  .card.err .num { color: var(--danger); }
+  .card.ml .num { color: var(--warning-amber); }
+  .card.muted .num { color: var(--text-muted); }
+
+  section.table-section { margin-bottom: 24px; scroll-margin-top: 16px; }
+
+  table {
+    width: 100%;
+    background: var(--surface);
+    border-collapse: collapse;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border);
+  }
+  th {
+    background: var(--brand-navy);
+    color: #ffffff;
+    text-align: left;
+    padding: 12px 14px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 600;
+  }
+  td {
+    padding: 12px 14px;
+    border-top: 1px solid var(--border-row);
+    font-size: 13px;
+    vertical-align: top;
+    color: var(--text-primary);
+  }
+  tbody tr[data-row="main"] { scroll-margin-top: 80px; }
+  tr:nth-child(4n+1) td { background: var(--surface); }
+  tr:nth-child(4n+3) td { background: var(--surface-alt); }
+  tr:hover td { background: var(--surface-hover); }
+  tr:target td { background: var(--accent-dim) !important; outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .tag { display: inline-block; padding: 4px 10px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
+  .tag.aprovada { background: var(--success-bg); color: var(--success-fg); }
+  .tag.divergencia { background: var(--warning-bg); color: var(--warning-fg); }
+  .tag.bloqueada { background: var(--danger-bg); color: var(--danger-fg); }
+  .tag.aguardando_ml { background: var(--warning-bg); color: var(--warning-amber); }
+  .tag.ja_processada { background: rgba(145, 152, 165, 0.18); color: var(--text-secondary); }
+  .tag.sem_card_pipefy { background: var(--info-bg); color: var(--info-fg); }
+
+  .motivo { color: var(--danger); font-size: 12px; }
   .right { text-align: right; }
-  .mono { font-family: "SF Mono", Consolas, monospace; }
-  .val-diff { color: #dc2626; font-weight: 700; }
-  .val-diff-note { font-size: 10px; color: #dc2626; font-weight: 400; }
-  .action-banner { padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 700; margin-bottom: 4px; display: inline-block; }
-  .action-banner.recusar { background: #dc2626; color: #fff; }
-  .action-banner.aprovar { background: #17a34a; color: #fff; }
-  .action-banner.atencao { background: #ea580c; color: #fff; }
-  .reinc-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; min-width: 110px; text-align: center; border-left: 3px solid; }
-  .meta { margin-top: 24px; padding: 16px; background: white; border-radius: 8px; font-size: 12px; color: #5a6c7f; }
-  details summary { cursor: pointer; font-size: 11px; color: #5a6c7f; list-style: revert; }
-  details ul { font-size: 11px; margin: 6px 0 0 0; padding-left: 16px; color: #5a6c7f; line-height: 1.5; }
-  details a { color: #2563eb; text-decoration: none; }
-  details a:hover { text-decoration: underline; }
-  /* Botão de copiar placa: ícone discreto ao lado do texto da placa */
+  .mono { font-family: var(--font-mono); }
+  .val-diff { color: var(--danger); font-weight: 700; }
+  .val-diff-note { font-size: 10px; color: var(--danger); font-weight: 400; }
+
+  .action-banner { padding: 6px 12px; border-radius: var(--radius-md); font-size: 12px; font-weight: 700; margin-bottom: 6px; display: inline-block; letter-spacing: 0.3px; }
+  .action-banner.recusar { background: var(--danger); color: #fff; }
+  .action-banner.aprovar { background: var(--success); color: #fff; }
+  .action-banner.atencao { background: var(--warning); color: #fff; }
+
+  .reinc-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 110px;
+    text-align: center;
+    border-left: 3px solid;
+  }
+
+  .meta {
+    margin-top: 24px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    font-size: 11px;
+    color: var(--text-secondary);
+    box-shadow: var(--shadow-sm);
+  }
+
+  a { color: var(--link); text-decoration: none; }
+  a:hover { color: var(--link-hover); text-decoration: underline; }
+
+  details summary { cursor: pointer; font-size: 11px; color: var(--text-secondary); list-style: revert; }
+  details ul { font-size: 11px; margin: 6px 0 0 0; padding-left: 16px; color: var(--text-secondary); line-height: 1.5; }
+  details a { color: var(--link); text-decoration: none; }
+  details a:hover { text-decoration: underline; color: var(--link-hover); }
+
+  /* Botão de copiar placa */
   .placa-wrap { display: inline-flex; align-items: center; gap: 4px; }
   .btn-copy {
-    cursor: pointer; background: transparent; border: 1px solid #d1d5db;
-    border-radius: 4px; padding: 2px 6px; font-size: 11px; line-height: 1;
-    color: #5a6c7f; transition: background .15s, border-color .15s;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-secondary);
+    transition: background 120ms, border-color 120ms, color 120ms;
   }
-  .btn-copy:hover { background: #eef2ff; border-color: #6366f1; color: #1a2332; }
-  .btn-copy:active { background: #c7d2fe; }
-  .btn-copy.copied { background: #d1fae5; border-color: #10b981; color: #065f46; }
-  /* Sub-linha de detalhe (Forma | Cotação | Comprador) */
+  .btn-copy:hover { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .btn-copy:active { background: var(--accent-dim); }
+  .btn-copy.copied { background: var(--success-bg); border-color: var(--success); color: var(--success-fg); }
+
+  /* Sub-linha de detalhe */
   tr.subline td {
-    background: #eef1f6 !important; border-top: 0; padding-top: 6px; padding-bottom: 12px;
-    font-size: 11px; color: #5a6c7f;
+    background: var(--surface-alt) !important;
+    border-top: 0;
+    padding-top: 6px;
+    padding-bottom: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
   }
-  tr.subline .lbl { color: #94a3b8; font-weight: 600; text-transform: uppercase;
-                    letter-spacing: .3px; margin-right: 4px; font-size: 10px; }
-  tr.subline .sep { color: #cbd5e1; margin: 0 8px; }
-  /* Lista de peças expansível */
-  details.pecas summary { color: #1a2332; font-weight: 600; font-size: 11px; }
-  details.pecas summary:hover { color: #2563eb; }
-  details.pecas ul { color: #334155; font-size: 12px; }
+  tr.subline .lbl {
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-right: 4px;
+    font-size: 10px;
+  }
+  tr.subline .sep { color: var(--border); margin: 0 8px; }
+
+  /* Lista de peças */
+  details.pecas summary { color: var(--text-primary); font-weight: 600; font-size: 11px; }
+  details.pecas summary:hover { color: var(--accent); }
+  details.pecas ul { color: var(--text-secondary); font-size: 12px; }
   details.pecas li.reincidente {
-    background: #ffffff; border-left: 4px solid #dc2626; padding: 4px 10px;
-    margin: 4px 0; border-radius: 0 4px 4px 0; box-shadow: 0 1px 3px rgba(0,0,0,.05);
-    border: 1px solid #e5e7eb; border-left: 4px solid #dc2626;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--danger);
+    padding: 4px 10px;
+    margin: 4px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    box-shadow: var(--shadow-sm);
   }
   details.pecas li.reincidente::before { content: "🔁 "; }
-  details.pecas li.reincidente strong { color: #991b1b; }
-  /* Toast feedback de cópia (visualmente discreto, acessível via aria-live) */
+  details.pecas li.reincidente strong { color: var(--danger-fg); }
+
+  /* Toast feedback */
   #copy-toast {
-    position: fixed; bottom: 24px; right: 24px;
-    background: #1a2332; color: white; padding: 10px 16px;
-    border-radius: 6px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.15);
-    opacity: 0; pointer-events: none; transition: opacity .25s;
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 10px 16px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 250ms ease;
   }
   #copy-toast.show { opacity: 1; }
+
+  /* Impressão — força light + quebras limpas */
+  @media print {
+    :root {
+      --bg-base: #ffffff;
+      --surface: #ffffff;
+      --surface-alt: #fafbfd;
+      --surface-hover: #ffffff;
+      --border: #d4dae8;
+      --border-row: #eef1f5;
+      --text-primary: #1a2332;
+      --text-secondary: #5a6c7f;
+      --text-muted: #6b7280;
+      --link: #2563eb;
+      --link-hover: #1d4ed8;
+    }
+    body { padding: 12px; font-size: 11px; }
+    #theme-toggle, nav.toc, #copy-toast, .btn-copy { display: none !important; }
+    .report-header { border-bottom: 2px solid var(--brand-navy); }
+    section.table-section, .executive-summary, .meta { page-break-inside: avoid; break-inside: avoid; }
+    tr { page-break-inside: avoid; break-inside: avoid; }
+    thead { display: table-header-group; }
+    tfoot { display: table-footer-group; }
+    .tag { border: 1px solid currentColor; background: transparent !important; }
+    a { color: var(--brand-navy); text-decoration: underline; }
+    .card { box-shadow: none; break-inside: avoid; }
+  }
 </style>
 </head>
 {# ----- macros reusáveis ----- #}
@@ -288,18 +558,51 @@
   {% endif %}
 {% endmacro %}
 <body>
-  <h1>Validação de Ordens de Compra — {{ data_d1 }}</h1>
-  <div class="sub">Gerado em {{ gerado_em }} · Executado por {{ executado_por }} · {{ 'DRY-RUN' if dry_run else 'APLICADO' }}</div>
+  <header class="report-header">
+    <div>
+      <h1>Validação de Ordens de Compra — {{ data_d1 }}</h1>
+      <p class="meta-inline">
+        Gerado em <strong>{{ gerado_em }}</strong> · Executado por <strong>{{ executado_por }}</strong>
+        · <strong>{{ 'DRY-RUN' if dry_run else 'APLICADO' }}</strong>
+      </p>
+    </div>
+    <button id="theme-toggle" type="button" aria-label="Alternar tema claro/escuro" title="Alternar tema">
+      <span aria-hidden="true">🌙</span> Tema
+    </button>
+  </header>
 
   {% if historico_status and not historico_status.completo %}
-  <div style="background:#fee2e2;border-left:4px solid #dc2626;padding:12px;margin-bottom:16px;border-radius:4px;">
-    <strong style="color:#991b1b;font-size:14px;">⚠ HISTÓRICO DE DUPLICIDADES INCOMPLETO</strong>
-    <p style="margin:4px 0 0 0;font-size:12px;color:#7f1d1d;">
+  <div style="background: var(--danger-bg); border-left: 4px solid var(--danger); padding: 12px; margin-bottom: 16px; border-radius: var(--radius-sm); color: var(--danger-fg);">
+    <strong style="font-size:14px;">⚠ HISTÓRICO DE DUPLICIDADES INCOMPLETO</strong>
+    <p style="margin:4px 0 0 0;font-size:12px;">
       Apenas <strong>{{ historico_status.dias_cobertos }}/{{ historico_status.dias_necessarios }}</strong> dias populados.
       Alertas de peças duplicadas podem estar incompletos. O sistema continuará baixando o histórico automaticamente nas próximas execuções.
     </p>
   </div>
   {% endif %}
+
+  {# Resumo executivo textual — leitura rápida antes dos números #}
+  <section class="executive-summary" id="resumo" aria-label="Resumo executivo">
+    <p style="margin:0;">
+      <strong>{{ total }} OC(s)</strong> processada(s) em D-1.
+      {% if aprovadas %}<span class="ok">{{ aprovadas }} aprovada{{ 's' if aprovadas != 1 else '' }}</span>{% endif %}
+      {% if divergentes %}{% if aprovadas %}, {% endif %}<span class="warn">{{ divergentes }} divergência{{ 's' if divergentes != 1 else '' }}</span>{% endif %}
+      {% if bloqueadas %}, <span class="err">{{ bloqueadas }} bloqueada{{ 's' if bloqueadas != 1 else '' }}</span>{% endif %}
+      {% if aguardando_ml %}, <span class="ml">{{ aguardando_ml }} aguardando ML</span>{% endif %}
+      {% if ja_processadas %}, <span class="muted">{{ ja_processadas }} já processada{{ 's' if ja_processadas != 1 else '' }}</span>{% endif %}.
+      {% if ocs_orfas %}<br><span class="err">{{ ocs_orfas|length }} OC(s) órfã(s)</span> encontrada(s) no Club sem card correspondente no Pipefy.{% endif %}
+    </p>
+  </section>
+
+  {# Navegação rápida por seção relevante #}
+  <nav class="toc" aria-label="Sumário do relatório">
+    <a href="#resumo">Resumo</a>
+    <a href="#todas">Todas as OCs ({{ total }})</a>
+    {% if divergentes %}<a href="#secao-divergencia">Divergências ({{ divergentes }})</a>{% endif %}
+    {% if bloqueadas %}<a href="#secao-bloqueada">Bloqueadas ({{ bloqueadas }})</a>{% endif %}
+    {% if aguardando_ml %}<a href="#secao-aguardando_ml">Aguardando ML ({{ aguardando_ml }})</a>{% endif %}
+    {% if ocs_orfas %}<a href="#orfas">Órfãs ({{ ocs_orfas|length }})</a>{% endif %}
+  </nav>
 
   <div class="cards">
     <div class="card"><div class="lbl">Total OCs</div><div class="num">{{ total }}</div></div>
@@ -311,7 +614,7 @@
   </div>
 
   {% if modo_operacao == 'consulta' %}
-  <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#92400e;font-size:13px;">
+  <div style="background: var(--warning-bg); border: 1px solid var(--warning); border-radius: var(--radius-lg); padding: 12px 16px; margin-bottom: 16px; color: var(--warning-fg); font-size: 13px;">
     ⚠️ <strong>MODO CONSULTA</strong> — Nenhuma ação foi aplicada no Pipefy nem e-mails enviados. As ações sugeridas estão na coluna "Ação sugerida".
   </div>
   {% endif %}
@@ -323,6 +626,10 @@
      com base no que está visível. Hoje a base é 17, +1 se valor_cilia,
      +1 se cilia_mode!=off. #}
   {% set _ncols = 17 + (1 if _show_valor_cilia else 0) + (1 if cilia_mode != 'off' else 0) %}
+  {# Para deep-linking por status: guardamos o primeiro idx de cada status visto
+     na iteração e injetamos id="secao-<status>" apenas na primeira ocorrência. #}
+  {% set _primeiros_status = namespace(vistos=[]) %}
+  <section class="table-section" id="todas" aria-label="Todas as OCs">
   <table>
     <thead>
       <tr>
@@ -348,7 +655,13 @@
     </thead>
     <tbody>
     {% for r in resultados %}
-      <tr>
+      {% set _st = r.status.value %}
+      {% set _row_id = 'oc-' ~ r.oc.id_pedido %}
+      {% if _st not in _primeiros_status.vistos %}
+        {% set _ = _primeiros_status.vistos.append(_st) %}
+        {% set _row_id = 'secao-' ~ _st %}
+      {% endif %}
+      <tr id="{{ _row_id }}" data-row="main" data-status="{{ _st }}">
         <td class="mono">{{ r.oc.id_pedido }}</td>
         <td>{{ cell_placa_copiavel(r.oc.identificador) }}</td>
         <td>{{ (r.oc.fornecedor.for_nome if r.oc.fornecedor else "") or "—" }}</td>
@@ -412,10 +725,12 @@
     {% endfor %}
     </tbody>
   </table>
+  </section>
 
   {% if ocs_orfas %}
-  <h2 style="margin-top:32px;font-size:18px;">Revisão final ({{ ocs_orfas|length }})</h2>
-  <p style="color:#5a6c7f;font-size:13px;margin-top:0;">OCs encontradas no Club sem card correspondente no Pipefy — requer revisão manual.</p>
+  <section class="table-section" id="orfas" aria-label="OCs órfãs">
+  <h2>Revisão final — OCs órfãs ({{ ocs_orfas|length }})</h2>
+  <p style="color: var(--text-secondary); font-size: 13px; margin-top: 0;">OCs encontradas no Club sem card correspondente no Pipefy — requer revisão manual.</p>
   <table>
     <thead>
       <tr>
@@ -458,6 +773,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </section>
   {% endif %}
 
   <div class="meta">
@@ -468,6 +784,32 @@
 
   <!-- Toast acessível para feedback de "copiado" -->
   <div id="copy-toast" role="status" aria-live="polite"></div>
+
+  <!-- Toggle dark/light com persistência em localStorage. Dark é o default. -->
+  <script>
+    (function () {
+      var KEY = "validador-oc-report-theme";
+      var saved = null;
+      try { saved = localStorage.getItem(KEY); } catch (_) {}
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+      var btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      function render() {
+        var cur = document.documentElement.getAttribute("data-theme") || "dark";
+        btn.innerHTML = (cur === "dark" ? '<span aria-hidden="true">🌙</span> Tema escuro' : '<span aria-hidden="true">☀️</span> Tema claro');
+      }
+      render();
+      btn.addEventListener("click", function () {
+        var cur = document.documentElement.getAttribute("data-theme") || "dark";
+        var next = cur === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        try { localStorage.setItem(KEY, next); } catch (_) {}
+        render();
+      });
+    })();
+  </script>
 
   <!--
     JavaScript inline (puro client-side, sem chamadas externas):
