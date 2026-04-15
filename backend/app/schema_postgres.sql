@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS validacoes (
     relatorio_xlsx  TEXT,
     executado_por   TEXT,
     aguardando_ml   INTEGER NOT NULL DEFAULT 0,
-    ja_processadas  INTEGER NOT NULL DEFAULT 0
+    ja_processadas  INTEGER NOT NULL DEFAULT 0,
+    origem          TEXT    NOT NULL DEFAULT 'manual'
 );
 
 CREATE INDEX IF NOT EXISTS idx_validacoes_data_d1 ON validacoes(data_d1);
@@ -185,4 +186,17 @@ CREATE TABLE IF NOT EXISTS compradores (
     ativo        INTEGER NOT NULL DEFAULT 1,
     criado_em    TEXT DEFAULT CURRENT_TIMESTAMP,
     atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Lock persistente do CRON diário. PK = data_d1 garante unicidade.
+-- Protege contra dupla execução entre workers/restarts. TTL via expires_at.
+CREATE TABLE IF NOT EXISTS cron_locks (
+    data_d1       TEXT    PRIMARY KEY,
+    acquired_at   TEXT    NOT NULL,
+    expires_at    TEXT    NOT NULL,
+    host          TEXT    NOT NULL,
+    status        TEXT    NOT NULL,
+    tentativa     INTEGER NOT NULL DEFAULT 1,
+    last_error    TEXT,
+    updated_at    TEXT    NOT NULL
 );

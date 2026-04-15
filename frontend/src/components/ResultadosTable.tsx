@@ -13,10 +13,10 @@ const STATUS_LABEL: Record<
   { text: string; bg: string; fg: string }
 > = {
   aprovada: { text: "Aprovada", bg: COLORS.successBg, fg: COLORS.successFg },
-  divergencia: { text: "Divergencia", bg: COLORS.warningBg, fg: COLORS.warningFg },
+  divergencia: { text: "Divergência", bg: COLORS.warningBg, fg: COLORS.warningFg },
   bloqueada: { text: "Bloqueada", bg: COLORS.errorBg, fg: COLORS.errorFg },
-  aguardando_ml: { text: "ML -- Manual", bg: COLORS.warningBg, fg: COLORS.warningFg },
-  ja_processada: { text: "Ja processada", bg: "rgba(145, 152, 165, 0.15)", fg: COLORS.textSecondary },
+  aguardando_ml: { text: "ML — Manual", bg: COLORS.warningBg, fg: COLORS.warningFg },
+  ja_processada: { text: "Já processada", bg: "rgba(145, 152, 165, 0.15)", fg: COLORS.textSecondary },
   sem_card_pipefy: { text: "Sem card Pipefy", bg: "rgba(217, 70, 239, 0.12)", fg: "#e9a3ff" },
 };
 

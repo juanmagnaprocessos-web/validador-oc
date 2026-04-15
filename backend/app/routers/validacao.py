@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from datetime import date
 from pathlib import Path
 
@@ -9,16 +11,30 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.db import listar_historico, resultados_de
+from app.db import (
+    dry_runs_cron_pendentes,
+    listar_historico,
+    resultados_de,
+    ultima_falha_cron,
+    ultimo_cron_lock,
+)
 from app.models import StatusValidacao, Usuario
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, require_admin
 from app.services.orchestrator import executar_validacao
 from app.services.report import gerar_excel, gerar_html
+from app.services.validation_lock import get_lock as _get_validacao_lock
+
+_DATA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 router = APIRouter(tags=["validacao"])
 
-# Lock global: apenas uma validacao por vez
-_validacao_lock = asyncio.Lock()
+# Lock global: apenas uma validacao por vez (compartilhado com CRON)
+_validacao_lock = _get_validacao_lock()
+
+# Referências de tasks CRON em background — evita GC prematuro dos tasks
+# spawnados por /admin/cron/run-now (asyncio.create_task retorna ref que
+# pode ser coletada se ninguém segurar).
+_cron_tasks: set[asyncio.Task] = set()
 
 
 @router.post("/validar")
@@ -102,10 +118,77 @@ async def baixar_excel(data: str, _: Usuario = Depends(get_current_user)):
 
 @router.get("/historico")
 async def historico(
-    limite: int = Query(30, ge=1, le=1000, description="Limite de registros retornados (1 a 1000)"),
+    limite: int = Query(30, ge=1, le=500, description="Limite de registros (1 a 500)"),
+    data_inicio: str | None = Query(None, description="D-1 mínima YYYY-MM-DD"),
+    data_fim: str | None = Query(None, description="D-1 máxima YYYY-MM-DD"),
     _: Usuario = Depends(get_current_user),
 ):
-    return JSONResponse(listar_historico(limite))
+    if data_inicio is not None and not _DATA_ISO_RE.match(data_inicio):
+        raise HTTPException(422, "data_inicio inválida — use YYYY-MM-DD")
+    if data_fim is not None and not _DATA_ISO_RE.match(data_fim):
+        raise HTTPException(422, "data_fim inválida — use YYYY-MM-DD")
+    if data_inicio and data_fim and data_inicio > data_fim:
+        raise HTTPException(422, "data_inicio não pode ser maior que data_fim")
+    return JSONResponse(
+        listar_historico(limite=limite, data_inicio=data_inicio, data_fim=data_fim)
+    )
+
+
+@router.get("/cron/status")
+async def cron_status(_: Usuario = Depends(get_current_user)):
+    """Estado atual do CRON: última execução, última falha e dry-runs pendentes.
+
+    Alimenta os banners do Dashboard (vermelho se última execução falhou;
+    amarelo se houver validações CRON dry-run ainda não aplicadas).
+    """
+    return {
+        "enabled": settings.cron_enabled,
+        "hora_brt": f"{settings.cron_hour_brt:02d}:{settings.cron_minute:02d}",
+        "dry_run": settings.cron_dry_run,
+        "ultimo_lock": ultimo_cron_lock(),
+        "ultima_falha": ultima_falha_cron(),
+        "dry_runs_pendentes": dry_runs_cron_pendentes(dias=3),
+    }
+
+
+@router.post("/admin/cron/run-now")
+async def cron_run_now(
+    data_d1: str | None = Query(None, description="D-1 opcional YYYY-MM-DD (default: ontem)"),
+    _: Usuario = Depends(require_admin),
+):
+    """Dispara o job CRON manualmente (fora do horário). Útil para smoke test
+    e backfill pontual. Reusa toda a lógica (lock, probe, retry, relatório).
+
+    Proteções contra abuso:
+      - data_d1 limitada aos últimos 90 dias (evita backfill massivo)
+      - rejeita se já existe lock 'rodando' (evita fire-and-forget spam)
+    """
+    from datetime import timedelta
+    from app.services.cron_runner import run_daily_validation_job
+
+    if data_d1 is not None:
+        if not _DATA_ISO_RE.match(data_d1):
+            raise HTTPException(422, "data_d1 inválida — use YYYY-MM-DD")
+        data_override = date.fromisoformat(data_d1)
+        if data_override > date.today() or data_override < date.today() - timedelta(days=90):
+            raise HTTPException(422, "data_d1 deve estar entre hoje-90d e hoje")
+    else:
+        data_override = None
+
+    ultimo = ultimo_cron_lock()
+    if ultimo and ultimo.get("status") == "rodando":
+        raise HTTPException(429, f"CRON já em execução para D-1={ultimo.get('data_d1')}")
+
+    async def _dispatch():
+        try:
+            await run_daily_validation_job(data_d1_override=data_override)
+        except Exception:
+            logging.getLogger(__name__).exception("CRON run-now falhou")
+
+    task = asyncio.create_task(_dispatch())
+    _cron_tasks.add(task)
+    task.add_done_callback(_cron_tasks.discard)
+    return {"status": "disparado", "data_d1": data_d1 or "ontem-BRT"}
 
 
 @router.get("/config")
