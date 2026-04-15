@@ -62,8 +62,9 @@ export function TrocarSenha({ username, obrigatorio, onSucesso, onCancelar }: Pr
   const btnSec: React.CSSProperties = {
     ...btnPrimary,
     flex: 1,
-    background: COLORS.borderLight,
-    color: "#374151",
+    background: COLORS.bgHover,
+    color: COLORS.text,
+    border: `1px solid ${COLORS.border}`,
   };
 
   return (
@@ -71,7 +72,9 @@ export function TrocarSenha({ username, obrigatorio, onSucesso, onCancelar }: Pr
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,.5)",
+        background: "var(--modal-overlay)",
+        backdropFilter: "blur(4px)",
+        WebkitBackdropFilter: "blur(4px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

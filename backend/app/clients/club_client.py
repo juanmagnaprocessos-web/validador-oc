@@ -234,7 +234,50 @@ class ClubClient:
                 if isinstance(v, list):
                     pedidos = v
                     break
-        return pedidos or []
+        # Normalizar placa: v1 retorna identificador=null, mas a placa pode
+        # estar embutida em observacao / cot_obs / request.obs (dependendo
+        # do tipo de cotacao). Para OCs ML o payload nao contem placa e a
+        # busca retorna None — e limitacao arquitetural documentada.
+        return [self._normalizar_pedido_v1(p) for p in (pedidos or [])]
+
+    @staticmethod
+    def _normalizar_pedido_v1(raw: dict[str, Any]) -> dict[str, Any]:
+        """Extrai a placa de campos de observacao quando identificador
+        vem null (acontece na listagem v1 para a maioria das cotacoes).
+
+        Ordem de prioridade dos campos de origem:
+          1. identificador / identifier (se ja presentes)
+          2. request.obs (mesmo campo usado por _normalizar_pedido_v3)
+          3. observacao (raiz v1)
+          4. cot_obs (raiz v1)
+
+        OCs MERCADO LIVRE nao contem placa em nenhum campo do payload v1
+        (observacao traz JSON do ML sem placa). Para estas, identificador
+        permanece None e aparecera como "--" no dashboard; o analista ve
+        o fornecedor MERCADO LIVRE e sabe que precisa verificar manualmente.
+        """
+        if raw.get("identificador") or raw.get("identifier"):
+            return raw
+        candidatos: list[str] = []
+        req = raw.get("request")
+        if isinstance(req, dict) and isinstance(req.get("obs"), str):
+            candidatos.append(req["obs"])
+        obs = raw.get("observacao")
+        if isinstance(obs, str):
+            candidatos.append(obs)
+        cot_obs = raw.get("cot_obs")
+        if isinstance(cot_obs, str):
+            candidatos.append(cot_obs)
+        for texto in candidatos:
+            if not texto:
+                continue
+            m = _RE_PLACA.search(texto)
+            if m:
+                placa = f"{m.group(1).upper()}-{m.group(2).upper()}"
+                raw["identificador"] = placa
+                raw["identifier"] = placa
+                break
+        return raw
 
     async def listar_pedidos_v3(
         self,
@@ -417,6 +460,56 @@ class ClubClient:
                 if isinstance(data.get(k), list):
                     return data[k]
         return []
+
+    async def listar_ofertas_por_peca(
+        self, id_cotacao: str | int, *, page_size: int = 100
+    ) -> dict[str, int]:
+        """GET /api/v2/requests/{id}/products/offers?selected_only=0
+
+        Retorna o numero de fornecedores que ofertaram cada peca dentro
+        da cotacao (independente de terem sido selecionados ou nao).
+        Usado por R1 para validar o minimo de 3 cotacoes POR PECA
+        (nao pelo total global da cotacao).
+
+        Retorno: dict { produto_id (str): qtd_fornecedores }
+        Se falhar, retorna {} — R1 cai no fallback por contagem global.
+        """
+        url = f"{self._base_v1}/v2/requests/{id_cotacao}/products/offers"
+        params = {
+            "product_filter": "",
+            "page": "1",
+            "page_size": str(page_size),
+            "fornecedor": "",
+            "imprimir": "false",
+            "obs_only": "false",
+            "others_only": "false",
+            "variation_only": "false",
+            "category_id": "",
+            # selected_only=0 traz TODOS os que ofertaram (nao so vencedores)
+            "selected_only": "0",
+        }
+        try:
+            data = await self._request("GET", url, params=params)
+        except Exception as e:
+            logger.warning(
+                "Falha ao listar ofertas por peca da cotacao %s: %s",
+                id_cotacao, e,
+            )
+            return {}
+        produtos = data.get("produtos") if isinstance(data, dict) else data
+        if not isinstance(produtos, list):
+            return {}
+        resultado: dict[str, int] = {}
+        for p in produtos:
+            if not isinstance(p, dict):
+                continue
+            # O endpoint chama a lista de fornecedores que ofertaram de
+            # "vencedores" (mesmo com selected_only=0 traz todos).
+            vencedores = p.get("vencedores") or []
+            prod_id = p.get("prod_id") or p.get("pro_id") or p.get("produto_id")
+            if prod_id is not None:
+                resultado[str(prod_id)] = len(vencedores)
+        return resultado
 
     async def get_order_details(self, id_pedido: str | int) -> dict[str, Any]:
         """GET /v3/api/clients/orders/{id} — detalhes completos com items[]."""

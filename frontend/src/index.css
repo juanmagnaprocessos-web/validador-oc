@@ -1,48 +1,178 @@
-:root {
-  /* Colors */
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-danger: #dc2626;
-  --color-success: #17a34a;
-  --color-warning: #ea580c;
-  --color-warning-amber: #d97706;
-  --color-text: #1a2332;
-  --color-text-secondary: #5a6c7f;
-  --color-text-muted: #6b7280;
-  --color-bg: #f4f6fa;
-  --color-bg-white: #ffffff;
-  --color-border: #d1d5db;
-  --color-border-light: #e5e7eb;
-  --color-error-bg: #fecaca;
-  --color-error-fg: #991b1b;
-  --color-success-bg: #d1fae5;
-  --color-success-fg: #065f46;
+/* ==========================================================
+   Operations Lab — dual theme (dark + light) | Magna red
+   ========================================================== */
 
-  /* Shadows */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
+/* === Tema DARK (default) — paleta Magna === */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  /* Radius */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  /* Brand Magna (cores oficiais do logo) */
+  --brand-red: #c53542;         /* vermelho bordô da faixa do logo */
+  --brand-red-light: #e74c5c;   /* versão mais vibrante pro dark */
+  --brand-navy: #2c3464;        /* azul-marinho do texto MAGNA */
+  --brand-navy-light: #5868a0;  /* navy desbotado pra dark legível */
 
-  /* Typography */
-  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  line-height: 1.5;
+  --bg-deep: #07080b;
+  --bg-base: #0b0d14;           /* leve tom navy escuríssimo (0c0f1a) */
+  --surface: #14161f;           /* surface com leve tom navy */
+  --surface-elev: #1c1f2b;
+  --surface-hover: #23263a;
+
+  --border: #262a3a;
+  --border-strong: #353a52;
+  --border-row: #1a1d2a;
+
+  --text-primary: #e8eaef;
+  --text-secondary: #9198a8;
+  --text-muted: #6b7180;
+
+  --accent: var(--brand-red-light);
+  --accent-hover: #f1677a;
+  --accent-dim: rgba(231, 76, 92, 0.12);
+  --accent-ring: rgba(231, 76, 92, 0.35);
+
+  --navy-accent: var(--brand-navy-light);
+  --navy-dim: rgba(88, 104, 160, 0.14);
+
+  --success: #22c55e;
+  --success-bg: rgba(34, 197, 94, 0.12);
+  --success-fg: #86efac;
+
+  --warning: #f59e0b;
+  --warning-amber: #fbbf24;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-fg: #fcd34d;
+
+  --danger: var(--brand-red-light);
+  --danger-bg: rgba(231, 76, 92, 0.12);
+  --danger-fg: #fca5a5;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
+
+  --header-bg: rgba(11, 13, 20, 0.82);
+  --modal-overlay: rgba(0, 0, 0, 0.6);
+
+  --body-bg-fx:
+    radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      rgba(231, 76, 92, 0.06),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 0% 100%,
+      rgba(88, 104, 160, 0.05),
+      transparent 70%
+    );
+}
+
+/* === Tema LIGHT — paleta Magna direta === */
+[data-theme="light"] {
   color-scheme: light;
+
+  /* Brand Magna (valores puros do logo) */
+  --brand-red: #c53542;
+  --brand-red-light: #e0525e;
+  --brand-navy: #2c3464;
+  --brand-navy-light: #4a547d;
+
+  --bg-deep: #edeef2;
+  --bg-base: #fafbfc;
+  --surface: #ffffff;
+  --surface-elev: #f6f8fb;
+  --surface-hover: #eff2f7;
+
+  --border: #dde2ea;
+  --border-strong: #c4cbd6;
+  --border-row: #eff2f7;
+
+  --text-primary: var(--brand-navy);   /* texto usa navy Magna */
+  --text-secondary: #4a5466;
+  --text-muted: #78829a;
+
+  --accent: var(--brand-red);
+  --accent-hover: #a82a36;
+  --accent-dim: rgba(197, 53, 66, 0.08);
+  --accent-ring: rgba(197, 53, 66, 0.3);
+
+  --navy-accent: var(--brand-navy);
+  --navy-dim: rgba(44, 52, 100, 0.08);
+
+  --success: #16a34a;
+  --success-bg: rgba(22, 163, 74, 0.1);
+  --success-fg: #14532d;
+
+  --warning: #d97706;
+  --warning-amber: #ea580c;
+  --warning-bg: rgba(217, 119, 6, 0.1);
+  --warning-fg: #7c2d12;
+
+  --danger: var(--brand-red);
+  --danger-bg: rgba(197, 53, 66, 0.08);
+  --danger-fg: #7f1d1d;
+
+  --shadow-sm: 0 1px 3px rgba(44, 52, 100, 0.08);
+  --shadow-md: 0 4px 16px rgba(44, 52, 100, 0.1), 0 0 0 1px var(--border);
+  --shadow-lg: 0 12px 40px rgba(44, 52, 100, 0.15), 0 0 0 1px var(--border);
+
+  --header-bg: rgba(255, 255, 255, 0.82);
+  --modal-overlay: rgba(15, 23, 42, 0.35);
+
+  --body-bg-fx:
+    radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      rgba(197, 53, 66, 0.05),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 0% 100%,
+      rgba(44, 52, 100, 0.04),
+      transparent 70%
+    );
+}
+
+/* === Fontes === */
+:root {
+  --font-sans: "Inter Tight", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  background: var(--color-bg);
-  color: var(--color-text);
+  padding: 0;
   min-height: 100vh;
+}
+
+body {
+  background: var(--body-bg-fx), var(--bg-base);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.02em;
+  font-weight: 600;
 }
 
 button {
@@ -52,49 +182,76 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
 }
 
 input,
-select {
+select,
+textarea {
   font-family: inherit;
+  color: var(--text-primary);
 }
 
-/* Focus visible for accessibility */
+/* === Focus visible (accent ring) === */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3px var(--accent-ring);
+  border-color: var(--accent) !important;
 }
 
 a {
-  color: var(--color-primary);
+  color: var(--accent);
   text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 120ms ease;
 }
 
 a:hover {
-  text-decoration: underline;
+  border-bottom-color: var(--accent);
 }
 
-/* Scrollbar styling for table containers */
+/* === Scrollbar === */
 *::-webkit-scrollbar {
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
-  background: var(--color-border-light);
-  border-radius: 3px;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
+  background: var(--border-strong);
+  border-radius: 4px;
 }
 
-/* Responsive adjustments */
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* === Seleção === */
+::selection {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+/* === Animações utilitárias === */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* === Responsive === */
 @media (max-width: 768px) {
   body {
     font-size: 14px;
@@ -108,13 +265,11 @@ a:hover {
     font-size: 16px !important;
   }
 
-  /* Stack header elements vertically on mobile */
   header {
     flex-direction: column;
     align-items: flex-start !important;
   }
 
-  /* Full width buttons on mobile */
   nav {
     width: 100%;
   }
@@ -123,7 +278,6 @@ a:hover {
     flex: 1;
   }
 
-  /* Adjust form grid on mobile */
   form[style*="grid-template-columns"] {
     grid-template-columns: 1fr !important;
   }
@@ -134,7 +288,6 @@ a:hover {
 }
 
 @media (max-width: 480px) {
-  /* Even tighter on very small screens */
   header,
   main {
     padding-left: 12px !important;

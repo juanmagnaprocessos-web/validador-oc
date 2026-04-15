@@ -17,6 +17,7 @@ node_modules/
 dist/
 .vite/
 *.local
+*.tsbuildinfo
 
 # Segredos e configuração sensível
 .env
@@ -25,13 +26,17 @@ dist/
 backend/config/pipefy_ids.json
 backend/config/pipefy_ids_devolucao.json
 
-# Banco de dados local
+# Banco de dados local + sessao Cilia + outros artefatos de runtime
+backend/data/
 backend/data/*.db
 backend/data/*.db-wal
 backend/data/*.db-shm
-
-# Sessão persistente do Cilia (cookie sensível)
 backend/data/cilia_session.json
+
+# Scripts ad-hoc de debug (nao versionar)
+backend/scripts/debug_*.py
+backend/scripts/buscar_*.py
+backend/scripts/verificar_*.py
 
 # Relatórios gerados
 backend/relatorios/*.html

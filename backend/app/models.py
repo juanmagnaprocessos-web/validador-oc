@@ -68,6 +68,11 @@ class ProdutoCotacao(BaseModel):
     cod_interno: str | None = None
     valor_unitario: Decimal | None = None   # unit_price do Club
     valor_total: Decimal | None = None      # total_price do Club
+    # Quantidade de fornecedores que ofertaram ESTA peça especificamente
+    # (via /api/v2/requests/{id}/products/offers, selected_only=0).
+    # None quando o endpoint nao foi consultado ou falhou — R1 usa
+    # fallback para len(concorrentes) nesse caso.
+    qtd_cotacoes_peca: int | None = None
 
 
 class Concorrente(BaseModel):

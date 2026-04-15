@@ -69,6 +69,10 @@ export interface ProdutoOC {
   valor_unitario: number | null;
   valor_total: number | null;
   qtd_ocs_com_peca?: number;
+  // Quantos fornecedores ofertaram esta peca (R1 por peca).
+  // null quando endpoint /v2/requests/{id}/products/offers indisponivel;
+  // nesse caso cai no valor global r.qtd_cotacoes.
+  qtd_cotacoes_peca?: number | null;
 }
 
 export interface OcResultado {
@@ -215,6 +219,17 @@ export async function validar(
 
 export async function getHistorico(limite = 30): Promise<HistoricoEntry[]> {
   return asJson(await apiFetch(`${BASE}/historico?limite=${limite}`));
+}
+
+export interface ConfigPublica {
+  cilia_mode: CiliaMode;
+  cilia_base_url: string;
+  r2_modo: "alerta" | "bloqueio" | "off";
+  modo_operacao: "consulta" | "automatico";
+}
+
+export async function getConfig(): Promise<ConfigPublica> {
+  return asJson(await apiFetch(`${BASE}/config`));
 }
 
 export async function getResultados(

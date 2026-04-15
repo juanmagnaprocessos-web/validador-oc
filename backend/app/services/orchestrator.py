@@ -692,6 +692,8 @@ async def _coletar_para_card(
     tarefas = {}
     if oc_basico.id_cotacao:
         tarefas["concorrentes"] = club.get_concorrentes(oc_basico.id_cotacao)
+        # Ofertas por peca (para R1 validar minimo 3 POR PECA, nao global)
+        tarefas["ofertas_peca"] = club.listar_ofertas_por_peca(oc_basico.id_cotacao)
     tarefas["detalhes"] = club.get_order_details(oc_basico.id_pedido)
     if oc_basico.placa_normalizada:
         tarefas["cilia"] = cilia.consultar_por_placa(oc_basico.placa_normalizada)
@@ -707,6 +709,7 @@ async def _coletar_para_card(
         return v
 
     concorrentes_raw = _ok("concorrentes") or []
+    ofertas_por_peca: dict[str, int] = _ok("ofertas_peca") or {}
     detalhes = _ok("detalhes") or {}
     orcamento = _ok("cilia")
 
@@ -736,18 +739,20 @@ async def _coletar_para_card(
     # OC com TODOS os produtos cotados — gerando falsos positivos
     # enormes na R2 cross-time. O novo método respeita o que foi de
     # fato pedido por OC, alinhado com o relatório `Club > Produtos`.
-    produtos = [
-        ProdutoCotacao(
-            produto_id=str((it.get("product") or {}).get("id") or ""),
+    produtos = []
+    for it in (detalhes.get("items") or []):
+        prod_id = str((it.get("product") or {}).get("id") or "")
+        qtd_peca = ofertas_por_peca.get(prod_id) if prod_id else None
+        produtos.append(ProdutoCotacao(
+            produto_id=prod_id,
             descricao=(it.get("product") or {}).get("name"),
             quantidade=float(it.get("quantity") or 0),
             ean=(it.get("product") or {}).get("ean"),
             cod_interno=(it.get("product") or {}).get("internal_code"),
             valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
             valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
-        )
-        for it in (detalhes.get("items") or [])
-    ]
+            qtd_cotacoes_peca=qtd_peca,
+        ))
 
     if card.anexo_oc_url and card.valor_extraido_pdf is None:
         try:
@@ -1360,30 +1365,34 @@ async def _executar_validacao_impl(
                     )
                     return [], 0
                 items = det.get("items") or []
-                produtos = [
-                    ProdutoCotacao(
-                        produto_id=str(
-                            (it.get("product") or {}).get("id") or ""
-                        ),
+                # Para orfas, buscar ofertas por peca em paralelo com concorrentes
+                ofertas_peca: dict[str, int] = {}
+                if oc.id_cotacao:
+                    try:
+                        concs, ofertas_peca = await asyncio.gather(
+                            club.get_concorrentes(oc.id_cotacao),
+                            club.listar_ofertas_por_peca(oc.id_cotacao),
+                        )
+                        qtd_conc = len(concs)
+                    except Exception as e:
+                        logger.warning(
+                            "Falha concorrentes/ofertas para OC orfa %s (cot %s): %s",
+                            oc.id_pedido, oc.id_cotacao, e,
+                        )
+                produtos = []
+                for it in items:
+                    prod_id = str((it.get("product") or {}).get("id") or "")
+                    qtd_peca = ofertas_peca.get(prod_id) if prod_id else None
+                    produtos.append(ProdutoCotacao(
+                        produto_id=prod_id,
                         descricao=(it.get("product") or {}).get("name"),
                         quantidade=float(it.get("quantity") or 0),
                         ean=(it.get("product") or {}).get("ean"),
                         cod_interno=(it.get("product") or {}).get("internal_code"),
                         valor_unitario=_to_decimal(it.get("unit_price") or it.get("valor_unitario")),
                         valor_total=_to_decimal(it.get("total_price") or it.get("valor_total")),
-                    )
-                    for it in items
-                ]
-                # Buscar concorrentes se tiver id_cotacao
-                if oc.id_cotacao:
-                    try:
-                        concs = await club.get_concorrentes(oc.id_cotacao)
-                        qtd_conc = len(concs)
-                    except Exception as e:
-                        logger.warning(
-                            "Falha get_concorrentes para OC órfã %s (cot %s): %s",
-                            oc.id_pedido, oc.id_cotacao, e,
-                        )
+                        qtd_cotacoes_peca=qtd_peca,
+                    ))
             return produtos, qtd_conc
 
         dados_orfas = await asyncio.gather(
@@ -2192,6 +2201,7 @@ async def _executar_validacao_impl(
                     "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
                     "valor_total": float(p.valor_total) if p.valor_total else None,
                     "qtd_ocs_com_peca": qtd_ocs,
+                    "qtd_cotacoes_peca": getattr(p, "qtd_cotacoes_peca", None),
                 })
 
             registrar_oc_resultado(
@@ -2260,6 +2270,7 @@ async def _executar_validacao_impl(
                     "valor_unitario": float(p.valor_unitario) if p.valor_unitario else None,
                     "valor_total": float(p.valor_total) if p.valor_total else None,
                     "qtd_ocs_com_peca": qtd_ocs,
+                    "qtd_cotacoes_peca": getattr(p, "qtd_cotacoes_peca", None),
                 })
             divs_orfa_ser = [
                 {

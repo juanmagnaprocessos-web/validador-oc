@@ -267,7 +267,7 @@ export function AdminUsers() {
               }}
             >
               <thead>
-                <tr style={{ background: COLORS.text, color: "#ffffff" }}>
+                <tr style={{ background: COLORS.bgHover, color: COLORS.text }}>
                   <th style={thStyle} scope="col">ID</th>
                   <th style={thStyle} scope="col">Username</th>
                   <th style={thStyle} scope="col">Nome</th>

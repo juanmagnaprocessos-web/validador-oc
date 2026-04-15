@@ -3,6 +3,7 @@ import {
   apiFetch,
   AuthError,
   d1Iso,
+  getConfig,
   getHistorico,
   getResultados,
   OcResultado,
@@ -77,6 +78,20 @@ export function Dashboard() {
 
   useEffect(() => {
     carregarHistorico();
+    // Busca config publica para ter cilia_mode/cilia_base_url disponiveis
+    // independente de o usuario ter rodado uma validacao nesta sessao.
+    getConfig()
+      .then((cfg) => {
+        setCiliaMode(cfg.cilia_mode);
+        setCiliaBaseUrl(cfg.cilia_base_url);
+      })
+      .catch((e) => {
+        if (e instanceof AuthError) {
+          window.location.reload();
+          return;
+        }
+        console.error("Falha ao carregar config:", e);
+      });
   }, []);
 
   async function rodar() {
@@ -325,7 +340,7 @@ export function Dashboard() {
               borderRadius: "6px 6px 0 0",
               border: "none",
               borderBottom: tabView === "revisao" ? `2px solid ${COLORS.danger}` : "2px solid transparent",
-              background: tabView === "revisao" ? "#fff5f5" : "transparent",
+              background: tabView === "revisao" ? COLORS.dangerDim : "transparent",
               color: tabView === "revisao" ? COLORS.danger : COLORS.textSecondary,
               fontWeight: tabView === "revisao" ? 600 : 400,
             }}
@@ -424,8 +439,9 @@ export function Dashboard() {
             position: "fixed",
             bottom: 24,
             right: 24,
-            background: COLORS.text,
-            color: "#ffffff",
+            background: COLORS.bgWhite,
+            color: COLORS.text,
+            border: `1px solid ${COLORS.border}`,
             padding: "12px 20px",
             borderRadius: RADIUS.md,
             boxShadow: SHADOWS.lg,
@@ -437,7 +453,7 @@ export function Dashboard() {
             zIndex: 50,
           }}
         >
-          <Spinner size={18} color="#ffffff" />
+          <Spinner size={18} color={COLORS.primary} />
           Validando OCs...
         </div>
       )}

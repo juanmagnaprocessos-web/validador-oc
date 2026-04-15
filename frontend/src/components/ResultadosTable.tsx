@@ -13,17 +13,17 @@ const STATUS_LABEL: Record<
   { text: string; bg: string; fg: string }
 > = {
   aprovada: { text: "Aprovada", bg: COLORS.successBg, fg: COLORS.successFg },
-  divergencia: { text: "Divergencia", bg: "#fed7aa", fg: "#9a3412" },
+  divergencia: { text: "Divergencia", bg: COLORS.warningBg, fg: COLORS.warningFg },
   bloqueada: { text: "Bloqueada", bg: COLORS.errorBg, fg: COLORS.errorFg },
   aguardando_ml: { text: "ML -- Manual", bg: COLORS.warningBg, fg: COLORS.warningFg },
-  ja_processada: { text: "Ja processada", bg: COLORS.borderLight, fg: "#374151" },
-  sem_card_pipefy: { text: "Sem card Pipefy", bg: "#ede9fe", fg: "#7c3aed" },
+  ja_processada: { text: "Ja processada", bg: "rgba(145, 152, 165, 0.15)", fg: COLORS.textSecondary },
+  sem_card_pipefy: { text: "Sem card Pipefy", bg: "rgba(217, 70, 239, 0.12)", fg: "#e9a3ff" },
 };
 
 const SEV_COLORS: Record<string, { bg: string; fg: string; icon: string }> = {
-  erro: { bg: "#fecaca", fg: "#991b1b", icon: "\u26d4" },
-  alerta: { bg: "#fef3c7", fg: "#92400e", icon: "\u26a0\ufe0f" },
-  info: { bg: "#dbeafe", fg: "#1e40af", icon: "\u2139\ufe0f" },
+  erro: { bg: COLORS.errorBg, fg: COLORS.errorFg, icon: "\u26d4" },
+  alerta: { bg: COLORS.warningBg, fg: COLORS.warningFg, icon: "\u26a0\ufe0f" },
+  info: { bg: "rgba(59, 130, 246, 0.12)", fg: "#93c5fd", icon: "\u2139\ufe0f" },
 };
 
 type SortCol = "id_pedido" | "placa" | "fornecedor" | "comprador" | "valor_club" | "valor_pdf" | "qtd_cotacoes" | "status" | "reincidencia";
@@ -52,9 +52,9 @@ function ActionGuidanceBanner({ r }: { r: OcResultado }) {
     return (
       <div style={{
         padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
-        background: "#dc2626", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        background: COLORS.primary, color: "#ffffff", fontSize: 15, fontWeight: 700,
         display: "flex", alignItems: "center", gap: 10,
-        boxShadow: "0 2px 8px rgba(220,38,38,.3)",
+        boxShadow: "0 2px 14px rgba(239,68,68,.35)",
       }}>
         <span style={{ fontSize: 22 }}>{"\u26d4"}</span>
         <div>
@@ -70,9 +70,9 @@ function ActionGuidanceBanner({ r }: { r: OcResultado }) {
     return (
       <div style={{
         padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
-        background: "#17a34a", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        background: COLORS.success, color: "#0a0b0e", fontSize: 15, fontWeight: 700,
         display: "flex", alignItems: "center", gap: 10,
-        boxShadow: "0 2px 8px rgba(23,163,74,.3)",
+        boxShadow: "0 2px 14px rgba(34,197,94,.25)",
       }}>
         <span style={{ fontSize: 22 }}>{"\u2705"}</span>
         <div>
@@ -90,7 +90,7 @@ function ActionGuidanceBanner({ r }: { r: OcResultado }) {
         padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
         background: "#7c3aed", color: "#ffffff", fontSize: 15, fontWeight: 700,
         display: "flex", alignItems: "center", gap: 10,
-        boxShadow: "0 2px 8px rgba(124,58,237,.3)",
+        boxShadow: "0 2px 14px rgba(124,58,237,.35)",
       }}>
         <span style={{ fontSize: 22 }}>{"\ud83d\udccc"}</span>
         <div>
@@ -106,9 +106,9 @@ function ActionGuidanceBanner({ r }: { r: OcResultado }) {
     return (
       <div style={{
         padding: "12px 16px", marginBottom: 14, borderRadius: RADIUS.sm,
-        background: "#ea580c", color: "#ffffff", fontSize: 15, fontWeight: 700,
+        background: COLORS.warning, color: "#0a0b0e", fontSize: 15, fontWeight: 700,
         display: "flex", alignItems: "center", gap: 10,
-        boxShadow: "0 2px 8px rgba(234,88,12,.3)",
+        boxShadow: "0 2px 14px rgba(245,158,11,.25)",
       }}>
         <span style={{ fontSize: 22 }}>{"\u26a0\ufe0f"}</span>
         <div>
@@ -140,8 +140,8 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
     <div
       style={{
         padding: "20px 24px",
-        background: "#eef1f6",
-        borderTop: `3px solid ${COLORS.primary}`,
+        background: COLORS.bg,
+        borderTop: `2px solid ${COLORS.primary}`,
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         gap: 20,
@@ -157,7 +157,15 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
         <SectionTitle>Informacoes da OC</SectionTitle>
         <InfoGrid>
           <InfoItem label="N. OC" value={r.id_pedido} />
-          <InfoItem label="Placa" value={r.placa ?? "--"} />
+          <InfoItem
+            label="Placa"
+            value={<PlacaCell placa={r.placa} />}
+            hint={
+              !r.placa
+                ? "Esta OC foi gerada no Club sem placa associada. Verificar manualmente no card do Pipefy ou confirmar com o comprador."
+                : undefined
+            }
+          />
           <InfoItem label="Fornecedor" value={r.fornecedor ?? "--"} />
           <InfoItem label="Comprador" value={r.comprador ?? "--"} />
           <InfoItem label="Forma Pagamento" value={r.forma_pagamento_canonica ?? r.forma_pagamento ?? "--"} />
@@ -206,8 +214,8 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
             }}
             style={{
               display: "inline-flex", alignItems: "center", gap: 4,
-              padding: "4px 10px", background: "#f1f5f9", color: COLORS.text,
-              borderRadius: 4, fontSize: 11, fontWeight: 500, border: "1px solid #cbd5e1",
+              padding: "4px 10px", background: COLORS.bgHover, color: COLORS.text,
+              borderRadius: 4, fontSize: 11, fontWeight: 500, border: `1px solid ${COLORS.border}`,
               cursor: "pointer",
             }}
             title="Copiar numero da OC"
@@ -223,8 +231,8 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
               }}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 4,
-                padding: "4px 10px", background: "#f1f5f9", color: COLORS.text,
-                borderRadius: 4, fontSize: 11, fontWeight: 500, border: "1px solid #cbd5e1",
+                padding: "4px 10px", background: COLORS.bgHover, color: COLORS.text,
+                borderRadius: 4, fontSize: 11, fontWeight: 500, border: `1px solid ${COLORS.border}`,
                 cursor: "pointer",
               }}
               title="Copiar placa"
@@ -245,15 +253,15 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
         </SectionTitle>
         {r.produtos_json === null ? (
           <div style={{
-            padding: "14px 16px", background: "#fef3c7", border: "1px solid #fde68a",
-            borderRadius: RADIUS.sm, color: "#92400e", fontSize: 13, textAlign: "center",
+            padding: "14px 16px", background: COLORS.warningBg, border: `1px solid rgba(245,158,11,0.3)`,
+            borderRadius: RADIUS.sm, color: COLORS.warningFg, fontSize: 13, textAlign: "center",
           }}>
             Dados de pecas nao carregados -- execute nova validacao
           </div>
         ) : produtos.length > 0 ? (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
-              <tr style={{ background: "#e2e8f0" }}>
+              <tr style={{ background: COLORS.bgHover }}>
                 <th style={{ ...thSmall, width: 24 }}></th>
                 <th style={thSmall}>Descricao</th>
                 <th style={{ ...thSmall, textAlign: "right" }}>Qtd</th>
@@ -276,8 +284,8 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                   <tr
                     key={rowKey}
                     style={{
-                      borderTop: "1px solid #cbd5e1",
-                      background: isReincidente ? "#fef2f2" : i % 2 === 0 ? "#ffffff" : "#f8fafc",
+                      borderTop: `1px solid ${COLORS.border}`,
+                      background: isReincidente ? COLORS.errorBg : i % 2 === 0 ? COLORS.bgWhite : COLORS.bg,
                     }}
                   >
                     <td style={{ padding: "6px 4px", textAlign: "center" }}>
@@ -293,19 +301,27 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                       {p.descricao || "--"}
                     </td>
                     <td style={{ padding: "6px 8px", textAlign: "right" }}>{p.quantidade}</td>
-                    <td style={{
-                      padding: "6px 8px", textAlign: "center", fontSize: 11,
-                      fontWeight: (r.qtd_cotacoes ?? 0) < 3 ? 700 : 400,
-                      color: (r.qtd_cotacoes ?? 0) < 3 ? COLORS.danger : COLORS.successFg,
-                      background: (r.qtd_cotacoes ?? 0) < 3 ? "#fef2f2" : "transparent",
-                    }}>
-                      {r.qtd_cotacoes ?? "--"}
-                      {(p.qtd_ocs_com_peca ?? 0) > 1 && (
-                        <div style={{ fontSize: 9, color: COLORS.danger, fontWeight: 700 }}>
-                          {p.qtd_ocs_com_peca} OCs
-                        </div>
-                      )}
-                    </td>
+                    {(() => {
+                      // Valor por peca (preferencial); fallback para global da OC.
+                      const cotacoesPeca =
+                        p.qtd_cotacoes_peca ?? r.qtd_cotacoes ?? null;
+                      const abaixo = (cotacoesPeca ?? 0) < 3;
+                      return (
+                        <td style={{
+                          padding: "6px 8px", textAlign: "center", fontSize: 11,
+                          fontWeight: abaixo ? 700 : 400,
+                          color: abaixo ? COLORS.danger : COLORS.successFg,
+                          background: abaixo ? COLORS.errorBg : "transparent",
+                        }}>
+                          {cotacoesPeca ?? "--"}
+                          {(p.qtd_ocs_com_peca ?? 0) > 1 && (
+                            <div style={{ fontSize: 9, color: COLORS.danger, fontWeight: 700 }}>
+                              {p.qtd_ocs_com_peca} OCs
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })()}
                     <td style={{ padding: "6px 8px", textAlign: "right", fontSize: 11 }}>
                       {fmtMoney(p.valor_unitario ?? null)}
                     </td>
@@ -440,9 +456,19 @@ function InfoGrid({ children }: { children: React.ReactNode }) {
   );
 }
 
-function InfoItem({ label, value, highlight }: { label: string; value: string; highlight?: "erro" | "warn" }) {
+function InfoItem({
+  label,
+  value,
+  highlight,
+  hint,
+}: {
+  label: string;
+  value: string | React.ReactNode;
+  highlight?: "erro" | "warn";
+  hint?: string;
+}) {
   return (
-    <div style={{ fontSize: 12 }}>
+    <div style={{ fontSize: 12 }} title={hint}>
       <span style={{ color: COLORS.textMuted }}>{label}: </span>
       <span
         style={{
@@ -456,12 +482,36 @@ function InfoItem({ label, value, highlight }: { label: string; value: string; h
   );
 }
 
+/** Renderiza o valor da placa — com badge informativo quando vazia. */
+function PlacaCell({ placa }: { placa: string | null }) {
+  if (placa) return <>{placa}</>;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11,
+        fontWeight: 500,
+        padding: "2px 8px",
+        borderRadius: 4,
+        background: COLORS.warningBg,
+        color: COLORS.warningFg,
+        border: `1px solid rgba(245,158,11,0.3)`,
+      }}
+    >
+      <span aria-hidden>⚠</span>
+      Sem cadastro no Club
+    </span>
+  );
+}
+
 function ValueCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div
       style={{
-        background: highlight ? "#fef2f2" : "#fff",
-        border: `1px solid ${highlight ? "#fca5a5" : COLORS.borderLight}`,
+        background: highlight ? COLORS.errorBg : COLORS.bgWhite,
+        border: `1px solid ${highlight ? `rgba(239,68,68,0.4)` : COLORS.borderLight}`,
         borderRadius: RADIUS.sm,
         padding: "8px 14px",
         minWidth: 110,
@@ -483,7 +533,7 @@ function LinkBadge({ href, label, color }: { href: string; label: string; color:
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
+        gap: 5,
         padding: "4px 10px",
         background: color + "15",
         color,
@@ -494,7 +544,20 @@ function LinkBadge({ href, label, color }: { href: string; label: string; color:
         border: `1px solid ${color}40`,
       }}
     >
-      \u2197 {label}
+      {label}
+      <svg
+        width="10"
+        height="10"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M7 17L17 7M17 7H8M17 7v9" />
+      </svg>
     </a>
   );
 }
@@ -567,7 +630,7 @@ function ReincidenciaCard({ div: d }: { div: DivergenciaCompleta }) {
   return (
     <div
       style={{
-        background: "#ffffff",
+        background: COLORS.bgWhite,
         border: `1px solid ${COLORS.borderLight}`,
         borderLeft: `4px solid ${leftBorderColor}`,
         borderRadius: RADIUS.sm,
@@ -621,7 +684,7 @@ function ReincidenciaCard({ div: d }: { div: DivergenciaCompleta }) {
         style={{
           marginTop: 8,
           padding: "6px 10px",
-          background: "#fff",
+          background: COLORS.bgWhite,
           borderRadius: 4,
           fontSize: 11,
           color: COLORS.text,
@@ -644,7 +707,7 @@ function DivergenciaCard({ div: d }: { div: DivergenciaCompleta }) {
   return (
     <div
       style={{
-        background: "#ffffff",
+        background: COLORS.bgWhite,
         border: `1px solid ${COLORS.borderLight}`,
         borderLeft: `4px solid ${sev.fg}`,
         borderRadius: RADIUS.sm,
@@ -804,8 +867,8 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
             padding: "10px 16px",
             marginBottom: 12,
             borderRadius: RADIUS.sm,
-            background: reincSemDevolucao > 0 ? "#fef2f2" : "#fefce8",
-            border: `1px solid ${reincSemDevolucao > 0 ? "#fca5a5" : "#fde047"}`,
+            background: reincSemDevolucao > 0 ? COLORS.errorBg : COLORS.warningBg,
+            border: `1px solid ${reincSemDevolucao > 0 ? `rgba(239,68,68,0.4)` : `rgba(245,158,11,0.4)`}`,
             display: "flex",
             alignItems: "center",
             gap: 8,
@@ -831,7 +894,7 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
         <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
             <thead>
-              <tr style={{ background: COLORS.text, color: "#ffffff" }}>
+              <tr style={{ background: COLORS.bgHover, color: COLORS.text }}>
                 {columns.map((c) => (
                   <th
                     key={c.label || "expand"}
@@ -924,12 +987,12 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
                         borderTop: `1px solid ${COLORS.borderRow}`,
                         cursor: "pointer",
                         background: isExpanded
-                          ? "#eef2ff"
+                          ? COLORS.primaryDim
                           : hasReincidencia && reincSemDev
-                            ? "#fff5f5"
+                            ? COLORS.errorBg
                             : paged.indexOf(r) % 2 === 1
-                              ? "#f9fafb"
-                              : "#ffffff",
+                              ? COLORS.bg
+                              : COLORS.bgWhite,
                         transition: "background 100ms ease",
                       }}
                       onMouseEnter={(e) => {
@@ -939,10 +1002,10 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
                         if (!isExpanded) {
                           e.currentTarget.style.background =
                             hasReincidencia && reincSemDev
-                              ? "#fff5f5"
+                              ? COLORS.errorBg
                               : paged.indexOf(r) % 2 === 1
-                                ? "#f9fafb"
-                                : "#ffffff";
+                                ? COLORS.bg
+                                : COLORS.bgWhite;
                         }
                       }}
                     >
@@ -961,7 +1024,16 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
                         </span>
                       </td>
                       <td style={tdStyle}>{r.id_pedido}</td>
-                      <td style={{ ...tdStyle, fontWeight: 500 }}>{r.placa ?? "--"}</td>
+                      <td
+                        style={{ ...tdStyle, fontWeight: 500 }}
+                        title={
+                          !r.placa
+                            ? "Esta OC foi gerada no Club sem placa associada. Verificar manualmente."
+                            : undefined
+                        }
+                      >
+                        <PlacaCell placa={r.placa} />
+                      </td>
                       <td style={{ ...tdStyle, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {(r.fornecedor ?? "").slice(0, 25)}
                       </td>
@@ -1042,10 +1114,10 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
                           </a>
                         ) : (
                           <span style={{
-                            color: "#7c3aed",
+                            color: "#e9a3ff",
                             fontSize: 10,
                             fontWeight: 700,
-                            background: "#ede9fe",
+                            background: "rgba(217, 70, 239, 0.12)",
                             padding: "2px 6px",
                             borderRadius: 3,
                           }}>
@@ -1053,7 +1125,7 @@ export function ResultadosTable({ resultados, ciliaMode, ciliaBaseUrl }: Props) 
                           </span>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, color: "#b91c1c", fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <td style={{ ...tdStyle, color: COLORS.errorFg, fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {motivo || "--"}
                       </td>
                     </tr>

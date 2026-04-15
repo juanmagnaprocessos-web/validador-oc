@@ -725,8 +725,13 @@ class PipefyClient:
     # ---------- download de anexo + extração de valor ----------
 
     async def baixar_anexo(self, url: str) -> bytes:
-        """Baixa um anexo (o Pipefy usa URLs assinadas de S3)."""
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        """Baixa um anexo (o Pipefy usa URLs assinadas de S3).
+
+        Timeout 30s alinhado com o cliente Pipefy principal — PDFs da OC
+        sao pequenos (<1MB); 60s escondia anexos muito lentos e segurava
+        threads do Render Free sem ganho pratico.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.get(url)
             r.raise_for_status()
             return r.content

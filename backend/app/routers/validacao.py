@@ -101,8 +101,24 @@ async def baixar_excel(data: str, _: Usuario = Depends(get_current_user)):
 
 
 @router.get("/historico")
-async def historico(limite: int = 30, _: Usuario = Depends(get_current_user)):
+async def historico(
+    limite: int = Query(30, ge=1, le=1000, description="Limite de registros retornados (1 a 1000)"),
+    _: Usuario = Depends(get_current_user),
+):
     return JSONResponse(listar_historico(limite))
+
+
+@router.get("/config")
+async def config_publica(_: Usuario = Depends(get_current_user)):
+    """Config expose ao frontend — flags que controlam exibicao de botoes
+    e links (ex: botao 'Verificar no Cilia'). Valores vem de settings.
+    """
+    return {
+        "cilia_mode": settings.cilia_mode,
+        "cilia_base_url": settings.cilia_base_url,
+        "r2_modo": settings.r2_modo,
+        "modo_operacao": settings.modo_operacao,
+    }
 
 
 @router.get("/validacoes/{validacao_id}/resultados")
