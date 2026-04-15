@@ -1,6 +1,8 @@
-"""SQLite WAL para histórico e auditoria (Requisito 5.4 — rastreabilidade).
+"""Persistencia dual SQLite (dev) / Postgres Neon (prod).
 
-Usa sqlite3 raw, sem ORM, seguindo o padrão do projeto gestao-pop.
+Usa sqlite3 raw ou psycopg conforme `settings.db_dialect`, abstraidos
+via `app._dbconn.get_conn`. Funcoes de negocio (registrar_validacao,
+listar_historico, etc.) sao agnosticas ao dialeto.
 """
 from __future__ import annotations
 
@@ -8,11 +10,11 @@ import json
 import logging
 import shutil
 import sqlite3
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
+from app._dbconn import get_conn
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -232,11 +234,40 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
 ]
 
 
-def _aplicar_migracoes(conn: sqlite3.Connection) -> None:
+def _aplicar_migracoes(conn: Any) -> None:
+    """Aplica migracoes aditivas (adicionar colunas novas) de forma
+    idempotente. Checa existencia via information_schema (Postgres) ou
+    PRAGMA table_info (SQLite).
+    """
     for tabela, coluna, tipo in _MIGRATIONS:
-        existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
-        if coluna not in existentes:
-            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+        if conn.dialect == "postgres":
+            # information_schema é case-sensitive e minúsculas em Postgres.
+            existe = conn.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name = ?",
+                (tabela, coluna),
+            ).fetchone()
+            if existe:
+                continue
+            tipo_pg = _sqlite_type_to_postgres(tipo)
+            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo_pg}")
+        else:
+            existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
+            if coluna not in existentes:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+
+
+def _sqlite_type_to_postgres(tipo: str) -> str:
+    """Mapeia tipos SQLite -> Postgres (suficiente para as migracoes atuais)."""
+    t = tipo.strip()
+    low = t.upper()
+    if low.startswith("INTEGER"):
+        return t.replace("INTEGER", "INTEGER", 1)  # Postgres aceita INTEGER
+    if low.startswith("TEXT"):
+        return t.replace("TEXT", "TEXT", 1)
+    if low.startswith("REAL"):
+        return t.replace("REAL", "DOUBLE PRECISION", 1)
+    return t
 
 
 # Índices que dependem de colunas adicionadas por migrations — criados
@@ -282,45 +313,48 @@ def _seed_usuarios(conn) -> None:
 
 
 def init_db() -> None:
-    """Cria tabelas se não existirem, aplica migrações e habilita WAL."""
+    """Cria tabelas se nao existirem, aplica migracoes e, em SQLite, ativa WAL."""
     with get_conn() as conn:
-        conn.executescript(SCHEMA)
+        if conn.dialect == "postgres":
+            # Carrega schema Postgres (BIGSERIAL, LOWER() em vez de COLLATE).
+            schema_pg_path = Path(__file__).resolve().parent / "schema_postgres.sql"
+            schema_pg = schema_pg_path.read_text(encoding="utf-8")
+            conn.executescript(schema_pg)
+        else:
+            conn.executescript(SCHEMA)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=FULL;")
+            conn.execute("PRAGMA wal_autocheckpoint=1000;")
         _aplicar_migracoes(conn)
         for idx_sql in _POST_MIGRATION_INDEXES:
             conn.execute(idx_sql)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=FULL;")
-        conn.execute("PRAGMA wal_autocheckpoint=1000;")
         _seed_usuarios(conn)
         conn.commit()
 
 
 def backup_db() -> Path:
-    """Cria backup do banco antes de operações críticas.
-
-    - Faz WAL checkpoint para garantir que o .db está completo
-    - Copia o arquivo .db para .db.bak.<timestamp>
-    - Mantém apenas os últimos 5 backups (deleta os mais antigos)
-    - Retorna o Path do backup criado
+    """Backup so faz sentido para SQLite local. Em Postgres o Neon
+    gerencia snapshots/point-in-time-recovery pelo painel.
     """
+    if settings.db_dialect == "postgres":
+        logger.info("Postgres: backup gerenciado pelo provedor (Neon)")
+        return Path("(postgres-managed)")
+
     db_path = Path(settings.db_full_path)
     if not db_path.exists():
-        raise FileNotFoundError(f"Banco não encontrado: {db_path}")
+        raise FileNotFoundError(f"Banco nao encontrado: {db_path}")
 
-    # WAL checkpoint — força tudo pro .db antes de copiar
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
     finally:
         conn.close()
 
-    # Cria backup com timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = db_path.with_suffix(f".db.bak.{timestamp}")
     shutil.copy2(str(db_path), str(backup_path))
     logger.info("Backup criado: %s", backup_path)
 
-    # Mantém apenas os últimos 5 backups
     padrao = f"{db_path.stem}.db.bak.*"
     backups = sorted(
         db_path.parent.glob(padrao),
@@ -332,18 +366,6 @@ def backup_db() -> Path:
         logger.info("Backup antigo removido: %s", antigo)
 
     return backup_path
-
-
-@contextmanager
-def get_conn() -> Iterator[sqlite3.Connection]:
-    """Context manager de conexão SQLite com row_factory dict-like."""
-    conn = sqlite3.connect(settings.db_full_path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON;")
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 
 # ---------- Persistência de validações ----------
@@ -367,7 +389,7 @@ def registrar_validacao(
                (data_execucao, data_d1, total_ocs, aprovadas, divergentes, bloqueadas,
                 dry_run, relatorio_html, relatorio_xlsx, executado_por,
                 aguardando_ml, ja_processadas)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
             (
                 datetime.now().isoformat(timespec="seconds"),
                 data_d1,
@@ -491,7 +513,7 @@ def registrar_acao_planejada(
             """INSERT INTO acoes_pipefy_planejadas
                (validacao_id, oc_numero, card_id, acao, payload, motivo,
                 executada, erro, criado_em)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
             (
                 validacao_id,
                 oc_numero,
@@ -543,7 +565,7 @@ def criar_perfil(nome: str, descricao: str | None = None, permissoes: list[str] 
         if existing:
             return int(existing["id"])
         cur = conn.execute(
-            "INSERT INTO perfis (nome, descricao, permissoes, criado_em) VALUES (?, ?, ?, ?)",
+            "INSERT INTO perfis (nome, descricao, permissoes, criado_em) VALUES (?, ?, ?, ?) RETURNING id",
             (
                 nome,
                 descricao,
@@ -641,7 +663,7 @@ def criar_usuario(
             """INSERT INTO usuarios
                (username, nome, email, senha_hash, perfil_id, ativo,
                 must_change_password, criado_em)
-               VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?) RETURNING id""",
             (
                 username,
                 nome,
@@ -657,9 +679,11 @@ def criar_usuario(
 
 
 def get_usuario_por_username(username: str) -> dict[str, Any] | None:
+    # LOWER() funciona em SQLite e Postgres; remove a dependencia de
+    # COLLATE NOCASE (SQLite-only).
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM usuarios WHERE username = ? COLLATE NOCASE",
+            "SELECT * FROM usuarios WHERE LOWER(username) = LOWER(?)",
             (username,),
         ).fetchone()
         return dict(row) if row else None
@@ -738,29 +762,55 @@ def registrar_login(usuario_id: int) -> None:
 def registrar_historico_produtos(
     linhas: list[dict[str, Any]]
 ) -> int:
-    """Insere/atualiza várias linhas de `historico_produtos_oc` em batch.
+    """Insere varias linhas de `historico_produtos_oc` em batch.
 
-    Idempotente via `INSERT OR IGNORE` no UNIQUE(id_pedido, chave_produto).
-    Retorna o número de linhas efetivamente inseridas (descontando os
-    ignores). Cada linha é um dict com as chaves do schema.
+    Idempotente via `ON CONFLICT DO NOTHING` no UNIQUE(id_pedido, chave_produto).
+    `ON CONFLICT DO NOTHING` e suportado em SQLite >=3.24 e em Postgres.
+    Retorna o numero de linhas inseridas. Cada linha e um dict com as
+    chaves do schema.
     """
     if not linhas:
         return 0
     agora = datetime.now().isoformat(timespec="seconds")
+    inseridos = 0
     with get_conn() as conn:
-        cur = conn.executemany(
-            """INSERT OR IGNORE INTO historico_produtos_oc
-               (data_oc, id_pedido, id_cotacao, placa_normalizada,
-                identificador, chave_produto, descricao, fornecedor_id,
-                fornecedor_nome, quantidade, card_pipefy_id, criado_em)
-               VALUES (:data_oc, :id_pedido, :id_cotacao, :placa_normalizada,
-                       :identificador, :chave_produto, :descricao,
-                       :fornecedor_id, :fornecedor_nome, :quantidade,
-                       :card_pipefy_id, :criado_em)""",
-            [{**l, "criado_em": agora} for l in linhas],
-        )
+        for l in linhas:
+            cur = conn.execute(
+                """INSERT INTO historico_produtos_oc
+                   (data_oc, id_pedido, id_cotacao, placa_normalizada,
+                    identificador, chave_produto, descricao, fornecedor_id,
+                    fornecedor_nome, quantidade, card_pipefy_id, criado_em)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (id_pedido, chave_produto) DO NOTHING""",
+                (
+                    l.get("data_oc"),
+                    l.get("id_pedido"),
+                    l.get("id_cotacao"),
+                    l.get("placa_normalizada"),
+                    l.get("identificador"),
+                    l.get("chave_produto"),
+                    l.get("descricao"),
+                    l.get("fornecedor_id"),
+                    l.get("fornecedor_nome"),
+                    l.get("quantidade"),
+                    l.get("card_pipefy_id"),
+                    agora,
+                ),
+            )
+            # rowcount indica se inseriu (1) ou ignorou (0)
+            if getattr(cur._cur, "rowcount", 0) > 0:
+                inseridos += 1
         conn.commit()
-        return cur.rowcount or 0
+    return inseridos
+
+
+def _data_min_janela(data_max: str, dias: int) -> str:
+    """Calcula ISO date de `data_max - dias`, feito em Python para ser
+    agnostico ao dialeto SQL (SQLite usa date(?, '-N days'), Postgres
+    nao tem esse shorthand)."""
+    from datetime import date as _date, timedelta
+    base = _date.fromisoformat(data_max)
+    return (base - timedelta(days=int(dias))).isoformat()
 
 
 def buscar_reincidencias(
@@ -771,21 +821,21 @@ def buscar_reincidencias(
     dias: int,
     ignorar_id_pedido: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Busca registros anteriores da mesma peça (placa+chave) numa janela
+    """Busca registros anteriores da mesma peca (placa+chave) numa janela
     de N dias antes (e incluindo) `data_max`. Exclui opcionalmente um
-    id_pedido (para não contar a própria OC sendo validada)."""
+    id_pedido (para nao contar a propria OC sendo validada)."""
+    data_min = _data_min_janela(data_max, dias)
     sql = """
         SELECT * FROM historico_produtos_oc
         WHERE placa_normalizada = ?
           AND chave_produto = ?
-          AND data_oc >= date(?, ?)
+          AND data_oc >= ?
           AND data_oc <= ?
         """
     params: list[Any] = [
         placa_normalizada,
         chave_produto,
-        data_max,
-        f"-{int(dias)} days",
+        data_min,
         data_max,
     ]
     if ignorar_id_pedido:
@@ -802,32 +852,47 @@ def buscar_todas_duplicidades_placa(
     data_max: str,
     dias: int,
 ) -> list[dict[str, Any]]:
-    """Retorna TODAS as peças compradas 2+ vezes para a mesma placa
+    """Retorna TODAS as pecas compradas 2+ vezes para a mesma placa
     na janela de `dias` dias. Agrupa por chave_produto e retorna
-    uma lista com cada grupo (todas as ocorrências).
+    uma lista com cada grupo (todas as ocorrencias).
 
-    Usado para mostrar ao analista o histórico completo de duplicidades
-    da placa, mesmo peças que não estão na OC do dia atual."""
-    sql = """
-        SELECT chave_produto, descricao, COUNT(*) as total_ocorrencias,
-               GROUP_CONCAT(id_pedido, '|') as ids_pedido,
-               GROUP_CONCAT(data_oc, '|') as datas_oc,
-               GROUP_CONCAT(fornecedor_nome, '|') as fornecedores,
-               GROUP_CONCAT(card_pipefy_id, '|') as cards_pipefy
-        FROM historico_produtos_oc
-        WHERE placa_normalizada = ?
-          AND data_oc >= date(?, ?)
-          AND data_oc <= ?
-        GROUP BY chave_produto
-        HAVING COUNT(*) > 1
-        ORDER BY total_ocorrencias DESC, chave_produto
-    """
-    params = [
-        placa_normalizada,
-        data_max,
-        f"-{int(dias)} days",
-        data_max,
-    ]
+    Usa STRING_AGG (Postgres) ou GROUP_CONCAT (SQLite) conforme o dialeto
+    ativo, ja que nao ha agregador de strings ANSI-SQL portavel."""
+    data_min = _data_min_janela(data_max, dias)
+    if settings.db_dialect == "postgres":
+        agg = "STRING_AGG"
+        # STRING_AGG exige texto — garantimos cast explicito em card_pipefy_id
+        # (pode ser TEXT ou NULL; STRING_AGG ignora NULLs automaticamente)
+        sql = """
+            SELECT chave_produto, descricao, COUNT(*) as total_ocorrencias,
+                   STRING_AGG(id_pedido, '|') as ids_pedido,
+                   STRING_AGG(data_oc, '|') as datas_oc,
+                   STRING_AGG(fornecedor_nome, '|') as fornecedores,
+                   STRING_AGG(card_pipefy_id, '|') as cards_pipefy
+            FROM historico_produtos_oc
+            WHERE placa_normalizada = ?
+              AND data_oc >= ?
+              AND data_oc <= ?
+            GROUP BY chave_produto, descricao
+            HAVING COUNT(*) > 1
+            ORDER BY total_ocorrencias DESC, chave_produto
+        """
+    else:
+        sql = """
+            SELECT chave_produto, descricao, COUNT(*) as total_ocorrencias,
+                   GROUP_CONCAT(id_pedido, '|') as ids_pedido,
+                   GROUP_CONCAT(data_oc, '|') as datas_oc,
+                   GROUP_CONCAT(fornecedor_nome, '|') as fornecedores,
+                   GROUP_CONCAT(card_pipefy_id, '|') as cards_pipefy
+            FROM historico_produtos_oc
+            WHERE placa_normalizada = ?
+              AND data_oc >= ?
+              AND data_oc <= ?
+            GROUP BY chave_produto
+            HAVING COUNT(*) > 1
+            ORDER BY total_ocorrencias DESC, chave_produto
+        """
+    params = [placa_normalizada, data_min, data_max]
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
@@ -866,8 +931,11 @@ def marcar_dia_processado(data_oc: str, tinha_dados: bool) -> None:
     """
     with get_conn() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO historico_dias_processados "
-            "(data_oc, tinha_dados, processado_em) VALUES (?, ?, ?)",
+            """INSERT INTO historico_dias_processados
+               (data_oc, tinha_dados, processado_em) VALUES (?, ?, ?)
+               ON CONFLICT (data_oc) DO UPDATE SET
+                 tinha_dados = EXCLUDED.tinha_dados,
+                 processado_em = EXCLUDED.processado_em""",
             (data_oc, 1 if tinha_dados else 0, datetime.now().isoformat(timespec="seconds")),
         )
         conn.commit()
@@ -887,14 +955,20 @@ def atualizar_cache_devolucoes(linhas: list[dict[str, Any]]) -> int:
         conn.execute("SAVEPOINT cache_devolucoes_update")
         try:
             conn.execute("DELETE FROM cache_devolucoes")
-            if linhas:
-                conn.executemany(
+            for l in linhas:
+                conn.execute(
                     """INSERT INTO cache_devolucoes
                        (placa_normalizada, card_id, n_oc, peca_descricao,
                         fase_atual, atualizado_em)
-                       VALUES (:placa_normalizada, :card_id, :n_oc,
-                               :peca_descricao, :fase_atual, :atualizado_em)""",
-                    [{**l, "atualizado_em": agora} for l in linhas],
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        l.get("placa_normalizada"),
+                        l.get("card_id"),
+                        l.get("n_oc"),
+                        l.get("peca_descricao"),
+                        l.get("fase_atual"),
+                        agora,
+                    ),
                 )
             conn.execute("RELEASE SAVEPOINT cache_devolucoes_update")
             conn.commit()
@@ -948,14 +1022,21 @@ def atualizar_cache_cancelamentos(linhas: list[dict[str, Any]]) -> int:
         conn.execute("SAVEPOINT cache_cancelamentos_update")
         try:
             conn.execute("DELETE FROM cache_cancelamentos")
-            if linhas:
-                conn.executemany(
+            for l in linhas:
+                conn.execute(
                     """INSERT INTO cache_cancelamentos
                        (placa_normalizada, card_id, tipo, fase_atual,
                         descricao_pecas, codigo_oc, atualizado_em)
-                       VALUES (:placa_normalizada, :card_id, :tipo, :fase_atual,
-                               :descricao_pecas, :codigo_oc, :atualizado_em)""",
-                    [{**l, "atualizado_em": agora} for l in linhas],
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        l.get("placa_normalizada"),
+                        l.get("card_id"),
+                        l.get("tipo"),
+                        l.get("fase_atual"),
+                        l.get("descricao_pecas"),
+                        l.get("codigo_oc"),
+                        agora,
+                    ),
                 )
             conn.execute("RELEASE SAVEPOINT cache_cancelamentos_update")
             conn.commit()

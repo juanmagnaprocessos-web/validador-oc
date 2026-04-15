@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # --- Aplicação ---
     app_env: str = Field("development", alias="APP_ENV")
     db_path: str = Field("data/validador.db", alias="DB_PATH")
+    # DATABASE_URL (quando presente) tem prioridade sobre db_path.
+    # Aceita:
+    #   - "" (vazio)                    -> usa SQLite em data/db_path
+    #   - "sqlite:///caminho/arq.db"    -> SQLite no caminho indicado
+    #   - "postgresql://user:pass@host/db?sslmode=require" -> Postgres (Neon)
+    database_url: str = Field("", alias="DATABASE_URL")
     relatorios_dir: str = Field("relatorios", alias="RELATORIOS_DIR")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     r3_tolerancia_centavos: int = Field(0, alias="R3_TOLERANCIA_CENTAVOS")
@@ -154,6 +160,25 @@ class Settings(BaseSettings):
         p = raw if raw.is_absolute() else BASE_DIR / raw
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def db_dialect(self) -> str:
+        """Retorna 'postgres' ou 'sqlite' conforme DATABASE_URL."""
+        url = self.database_url.strip().lower()
+        if url.startswith(("postgres://", "postgresql://")):
+            return "postgres"
+        return "sqlite"
+
+    @property
+    def db_connection_string(self) -> str:
+        """URL/path final de conexao. Para SQLite retorna o caminho absoluto."""
+        if self.db_dialect == "postgres":
+            return self.database_url
+        # Se DATABASE_URL = sqlite:///path, extrai; senao usa db_full_path
+        url = self.database_url.strip()
+        if url.startswith("sqlite:///"):
+            return url[len("sqlite:///"):]
+        return str(self.db_full_path)
 
     @property
     def relatorios_full_dir(self) -> Path:

@@ -18,6 +18,15 @@ from app.config import settings
 from app.main import app
 from app.services import auth as auth_service
 
+# Esses testes usam monkeypatch em settings.db_full_path para criar um
+# SQLite temporario isolado. Em Postgres (Neon), monkey-patch nao tem
+# efeito e os testes colidiriam em UNIQUE constraints. Pulamos quando
+# DATABASE_URL aponta para Postgres.
+pytestmark = pytest.mark.skipif(
+    settings.db_dialect == "postgres",
+    reason="Testes isolados em SQLite temp; em Postgres use teste de integracao.",
+)
+
 
 ADMIN_USER = "admin_test"
 ADMIN_PASS = "admin12345"  # >= 8 chars

@@ -44,17 +44,31 @@ def init_table() -> None:
 
 
 def add(club_user_id: int, nome: str, email: str, ativo: bool = True) -> None:
+    """Upsert de comprador.
+
+    Passamos `criado_em` / `atualizado_em` explicitamente (em vez de
+    depender de `DEFAULT CURRENT_TIMESTAMP`) para garantir formato ISO
+    consistente entre SQLite e Postgres — `CURRENT_TIMESTAMP` em Postgres
+    inclui fracoes de segundo e timezone, divergindo do formato usado no
+    resto do sistema.
+    """
+    from datetime import datetime
     init_table()
+    agora = datetime.now().isoformat(timespec="seconds")
     with get_conn() as conn:
         conn.execute(
-            """INSERT INTO compradores (club_user_id, nome, email, ativo)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO compradores (club_user_id, nome, email, ativo,
+                                        criado_em, atualizado_em)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(club_user_id) DO UPDATE SET
                    nome = excluded.nome,
                    email = excluded.email,
                    ativo = excluded.ativo,
-                   atualizado_em = CURRENT_TIMESTAMP""",
-            (int(club_user_id), nome.strip(), email.strip().lower(), 1 if ativo else 0),
+                   atualizado_em = excluded.atualizado_em""",
+            (
+                int(club_user_id), nome.strip(), email.strip().lower(),
+                1 if ativo else 0, agora, agora,
+            ),
         )
         conn.commit()
     logger.info("Comprador %s (%s) cadastrado", club_user_id, nome)
