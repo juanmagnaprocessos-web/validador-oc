@@ -209,6 +209,23 @@ CREATE TABLE IF NOT EXISTS cache_cilia_orcamentos (
     payload_json       TEXT    NOT NULL,    -- JSON de OrcamentoCilia
     atualizado_em      TEXT    NOT NULL
 );
+
+-- Lock persistente do CRON diário. PK = data_d1 garante que cada dia
+-- só roda uma vez; TTL em expires_at permite que um processo que crashou
+-- segurando o lock seja desalojado por outro após 2h (CRON_LOCK_TTL_S).
+-- status: 'rodando' | 'sucesso' | 'vazio' | 'falha'. Só 'sucesso' e 'vazio'
+-- impedem re-aquisição dentro do TTL; 'rodando' expirado libera; 'falha'
+-- permite retry imediato.
+CREATE TABLE IF NOT EXISTS cron_locks (
+    data_d1       TEXT    PRIMARY KEY,
+    acquired_at   TEXT    NOT NULL,
+    expires_at    TEXT    NOT NULL,
+    host          TEXT    NOT NULL,
+    status        TEXT    NOT NULL,
+    tentativa     INTEGER NOT NULL DEFAULT 1,
+    last_error    TEXT,
+    updated_at    TEXT    NOT NULL
+);
 """
 
 
@@ -231,6 +248,8 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("oc_resultados", "cancelamento_card_id", "TEXT"),
     ("oc_resultados", "card_pipefy_link", "TEXT"),
     ("oc_resultados", "forma_pagamento_canonica", "TEXT"),
+    # --- Sessão 13: CRON diário ---
+    ("validacoes", "origem", "TEXT NOT NULL DEFAULT 'manual'"),
 ]
 
 
@@ -382,14 +401,15 @@ def registrar_validacao(
     relatorio_xlsx: str | None = None,
     aguardando_ml: int = 0,
     ja_processadas: int = 0,
+    origem: str = "manual",
 ) -> int:
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO validacoes
                (data_execucao, data_d1, total_ocs, aprovadas, divergentes, bloqueadas,
                 dry_run, relatorio_html, relatorio_xlsx, executado_por,
-                aguardando_ml, ja_processadas)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+                aguardando_ml, ja_processadas, origem)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
             (
                 datetime.now().isoformat(timespec="seconds"),
                 data_d1,
@@ -403,6 +423,7 @@ def registrar_validacao(
                 executado_por,
                 aguardando_ml,
                 ja_processadas,
+                origem,
             ),
         )
         conn.commit()
@@ -1142,11 +1163,152 @@ def cache_cilia_invalidate(placa_normalizada: str) -> None:
         conn.commit()
 
 
-def listar_historico(limite: int = 30) -> list[dict[str, Any]]:
+def listar_historico(
+    limite: int = 30,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+) -> list[dict[str, Any]]:
+    where_parts: list[str] = []
+    params: list[Any] = []
+    if data_inicio:
+        where_parts.append("data_d1 >= ?")
+        params.append(data_inicio)
+    if data_fim:
+        where_parts.append("data_d1 <= ?")
+        params.append(data_fim)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    params.append(limite)
+
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM validacoes ORDER BY data_execucao DESC LIMIT ?",
-            (limite,),
+            f"SELECT * FROM validacoes {where_sql} ORDER BY data_execucao DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- CRON locks ----------
+
+def adquirir_cron_lock(
+    data_d1: str,
+    host: str,
+    ttl_seconds: int,
+    tentativa: int = 1,
+) -> bool:
+    """Tenta adquirir lock para executar o CRON do dia data_d1.
+
+    Atomicidade via `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`
+    em 1 statement (SQLite 3.24+ e Postgres 9.5+). Elimina race TOCTOU.
+
+    Retorna True se adquiriu (RETURNING devolveu linha). Retorna False se:
+      - INSERT bateu ON CONFLICT E o UPDATE não se aplicou porque já existe
+        lock válido ('sucesso'/'vazio'/'rodando' ainda no TTL).
+
+    Regras de sobrescrita (cláusula WHERE no UPDATE):
+      - 'falha': sempre libera (retry imediato).
+      - 'rodando' ou 'sucesso'/'vazio' com expires_at < now: libera (TTL vencido).
+      - Caso contrário: mantém lock atual, não adquire.
+    """
+    from datetime import timedelta
+    agora = datetime.now()
+    expires = agora + timedelta(seconds=ttl_seconds)
+    agora_iso = agora.isoformat(timespec="seconds")
+    expires_iso = expires.isoformat(timespec="seconds")
+
+    # Usa rowcount em vez de RETURNING: o wrapper _dbconn trata RETURNING
+    # esperando `id` inteiro para lastrowid. Com rowcount evitamos esse
+    # caminho e mantemos atomicidade via ON CONFLICT + WHERE.
+    sql = """
+        INSERT INTO cron_locks
+            (data_d1, acquired_at, expires_at, host, status, tentativa,
+             last_error, updated_at)
+        VALUES (?, ?, ?, ?, 'rodando', ?, NULL, ?)
+        ON CONFLICT(data_d1) DO UPDATE SET
+            acquired_at = excluded.acquired_at,
+            expires_at  = excluded.expires_at,
+            host        = excluded.host,
+            status      = 'rodando',
+            tentativa   = excluded.tentativa,
+            last_error  = NULL,
+            updated_at  = excluded.updated_at
+        WHERE cron_locks.status = 'falha'
+           OR cron_locks.expires_at < excluded.acquired_at
+    """
+    with get_conn() as conn:
+        cur = conn.execute(
+            sql,
+            (data_d1, agora_iso, expires_iso, host, tentativa, agora_iso),
+        )
+        adquirido = cur.rowcount > 0
+        conn.commit()
+        return adquirido
+
+
+def finalizar_cron_lock(
+    data_d1: str,
+    status: str,
+    last_error: str | None = None,
+) -> None:
+    """Marca lock como 'sucesso' | 'vazio' | 'falha'. Truncar erro em 500."""
+    if last_error and len(last_error) > 500:
+        last_error = last_error[:500]
+    agora_iso = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE cron_locks SET
+                   status = ?, last_error = ?, updated_at = ?
+               WHERE data_d1 = ?""",
+            (status, last_error, agora_iso, data_d1),
+        )
+        conn.commit()
+
+
+def ultimo_cron_lock() -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cron_locks ORDER BY updated_at DESC, data_d1 DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def ultima_falha_cron() -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cron_locks WHERE status = 'falha' "
+            "ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def dry_runs_cron_pendentes(dias: int = 3) -> list[dict[str, Any]]:
+    """Validações CRON em dry-run dos últimos N dias ainda não aplicadas.
+
+    Pendente = existe linha dry_run=1 origem='cron' sem linha posterior
+    com dry_run=0 para o mesmo data_d1.
+
+    Usa timezone BRT (America/Sao_Paulo) para calcular o corte, alinhado
+    com `_computar_data_d1` no cron_runner. Se o servidor está em UTC,
+    `date.today()` retornaria o dia errado na madrugada.
+    """
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+    tz = ZoneInfo(settings.cron_timezone)
+    corte = (datetime.now(tz).date() - timedelta(days=dias)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT v.* FROM validacoes v
+               WHERE v.dry_run = 1
+                 AND v.origem = 'cron'
+                 AND v.data_d1 >= ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM validacoes v2
+                     WHERE v2.data_d1 = v.data_d1
+                       AND v2.dry_run = 0
+                       AND v2.data_execucao > v.data_execucao
+                 )
+               ORDER BY v.data_d1 DESC""",
+            (corte,),
         ).fetchall()
         return [dict(r) for r in rows]
 

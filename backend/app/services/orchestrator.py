@@ -940,6 +940,7 @@ async def executar_validacao(
     *,
     dry_run: bool = True,
     concorrencia: int = 10,
+    origem: str = "manual",
 ) -> tuple[int, list[ResultadoValidacao], list[OcOrfa], dict | None]:
     """Executa o pipeline completo no novo fluxo INVERTIDO:
 
@@ -959,7 +960,7 @@ async def executar_validacao(
     """
     try:
         async with asyncio.timeout(900):  # 15 minutos maximo
-            return await _executar_validacao_impl(data_d1, dry_run=dry_run, concorrencia=concorrencia)
+            return await _executar_validacao_impl(data_d1, dry_run=dry_run, concorrencia=concorrencia, origem=origem)
     except asyncio.TimeoutError:
         logger.error("Timeout global na validacao de %s", data_d1)
         raise HTTPException(504, "Validacao excedeu o tempo limite de 15 minutos")
@@ -970,6 +971,7 @@ async def _executar_validacao_impl(
     *,
     dry_run: bool = True,
     concorrencia: int = 10,
+    origem: str = "manual",
 ) -> tuple[int, list[ResultadoValidacao], list[OcOrfa], dict | None]:
     """Implementacao interna do pipeline (chamada por executar_validacao com timeout)."""
     init_db()
@@ -2149,9 +2151,10 @@ async def _executar_validacao_impl(
             divergentes=divergentes,
             bloqueadas=bloqueadas,
             dry_run=dry_run,
-            executado_por=settings.validador_identificador,
+            executado_por=settings.validador_identificador if origem == "manual" else "cron@scheduler",
             aguardando_ml=aguardando_ml,
             ja_processadas=ja_processadas,
+            origem=origem,
         )
 
         for r in resultados:

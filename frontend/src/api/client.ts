@@ -115,11 +115,38 @@ export interface HistoricoEntry {
   aprovadas: number;
   divergentes: number;
   bloqueadas: number;
-  aguardando_ml: number;
-  ja_processadas: number;
+  aguardando_ml: number | null;
+  ja_processadas: number | null;
   status: string;
   dry_run: number;
   executado_por: string | null;
+  origem: "manual" | "cron";
+}
+
+export interface HistoricoFiltros {
+  limite?: number;
+  data_inicio?: string;
+  data_fim?: string;
+}
+
+export interface CronLock {
+  data_d1: string;
+  acquired_at: string;
+  expires_at: string;
+  host: string;
+  status: "rodando" | "sucesso" | "vazio" | "falha";
+  tentativa: number;
+  last_error: string | null;
+  updated_at: string;
+}
+
+export interface CronStatus {
+  enabled: boolean;
+  hora_brt: string;
+  dry_run: boolean;
+  ultimo_lock: CronLock | null;
+  ultima_falha: CronLock | null;
+  dry_runs_pendentes: HistoricoEntry[];
 }
 
 // ----- Auth -----
@@ -217,8 +244,24 @@ export async function validar(
   return asJson(await apiFetch(url, { method: "POST" }));
 }
 
-export async function getHistorico(limite = 30): Promise<HistoricoEntry[]> {
-  return asJson(await apiFetch(`${BASE}/historico?limite=${limite}`));
+export async function getHistorico(
+  filtros: HistoricoFiltros = {},
+  init?: RequestInit,
+): Promise<HistoricoEntry[]> {
+  const params = new URLSearchParams();
+  params.set("limite", String(filtros.limite ?? 30));
+  if (filtros.data_inicio) params.set("data_inicio", filtros.data_inicio);
+  if (filtros.data_fim) params.set("data_fim", filtros.data_fim);
+  return asJson(await apiFetch(`${BASE}/historico?${params.toString()}`, init));
+}
+
+export async function getCronStatus(): Promise<CronStatus> {
+  return asJson(await apiFetch(`${BASE}/cron/status`));
+}
+
+export async function cronRunNow(dataD1?: string): Promise<{ status: string; data_d1: string }> {
+  const qs = dataD1 ? `?data_d1=${encodeURIComponent(dataD1)}` : "";
+  return asJson(await apiFetch(`${BASE}/admin/cron/run-now${qs}`, { method: "POST" }));
 }
 
 export interface ConfigPublica {

@@ -29,9 +29,20 @@ async def lifespan(app: FastAPI):
     init_db()
     import asyncio
     task = asyncio.create_task(_keep_alive()) if not _is_dev else None
-    yield
-    if task:
-        task.cancel()
+
+    from app.services.scheduler import start_scheduler, stop_scheduler
+    try:
+        start_scheduler()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Falha ao iniciar scheduler CRON")
+
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+        stop_scheduler()
 
 
 app = FastAPI(

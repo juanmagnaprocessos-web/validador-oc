@@ -1,11 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   apiFetch,
   AuthError,
+  cronRunNow,
   d1Iso,
   getConfig,
+  getCronStatus,
   getHistorico,
   getResultados,
+  type CronStatus,
+  type HistoricoEntry,
   OcResultado,
   urlRelatorioExcel,
   urlRelatorioHtml,
@@ -16,6 +20,7 @@ import { SummaryCards } from "./Cards";
 import { ResultadosTable } from "./ResultadosTable";
 import { SummaryChart } from "./SummaryChart";
 import { Spinner } from "./Spinner";
+import { HistoricoModal } from "./HistoricoModal";
 import {
   COLORS,
   SHADOWS,
@@ -28,16 +33,6 @@ import {
   cardPanel,
 } from "../styles/theme";
 
-interface HistoricoItem {
-  id: number;
-  data_d1: string;
-  total_ocs: number;
-  aprovadas: number;
-  divergentes: number;
-  aguardando_ml?: number | null;
-  ja_processadas?: number | null;
-}
-
 type TabView = "todas" | "revisao";
 
 export function Dashboard() {
@@ -47,11 +42,14 @@ export function Dashboard() {
   const [erro, setErro] = useState<string | null>(null);
   const [ultima, setUltima] = useState<ValidarResponse | null>(null);
   const [resultados, setResultados] = useState<OcResultado[]>([]);
-  const [historico, setHistorico] = useState<HistoricoItem[]>([]);
+  const [historico, setHistorico] = useState<HistoricoEntry[]>([]);
   const [tabView, setTabView] = useState<TabView>("todas");
   const [downloadando, setDownloadando] = useState<"html" | "excel" | null>(null);
   const [ciliaMode, setCiliaMode] = useState<string>("off");
   const [ciliaBaseUrl, setCiliaBaseUrl] = useState<string>("");
+  const [modalHistoricoAberto, setModalHistoricoAberto] = useState<boolean>(false);
+  const [cronStatus, setCronStatus] = useState<CronStatus | null>(null);
+  const verTodasBtnRef = useRef<HTMLButtonElement>(null);
 
   // Filtrar resultados para revisao: OCs que requerem atenção do analista
   const resultadosRevisao = resultados.filter((r) => {
@@ -65,7 +63,7 @@ export function Dashboard() {
 
   async function carregarHistorico() {
     try {
-      const h = await getHistorico(10);
+      const h = await getHistorico({ limite: 5 });
       setHistorico(h);
     } catch (e) {
       if (e instanceof AuthError) {
@@ -76,8 +74,38 @@ export function Dashboard() {
     }
   }
 
+  async function carregarCronStatus() {
+    try {
+      const s = await getCronStatus();
+      setCronStatus(s);
+    } catch (e) {
+      if (e instanceof AuthError) {
+        window.location.reload();
+        return;
+      }
+      console.error("Falha ao carregar status do CRON:", e);
+    }
+  }
+
+  async function dispararCronManual() {
+    try {
+      await cronRunNow();
+      setTimeout(() => {
+        carregarHistorico();
+        carregarCronStatus();
+      }, 1500);
+    } catch (e) {
+      if (e instanceof AuthError) {
+        window.location.reload();
+        return;
+      }
+      setErro(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   useEffect(() => {
     carregarHistorico();
+    carregarCronStatus();
     // Busca config publica para ter cilia_mode/cilia_base_url disponiveis
     // independente de o usuario ter rodado uma validacao nesta sessao.
     getConfig()
@@ -179,8 +207,86 @@ export function Dashboard() {
     }
   }
 
+  const banners = (() => {
+    if (!cronStatus) return null;
+    const nodes: JSX.Element[] = [];
+    const ultimaFalha = cronStatus.ultima_falha;
+    if (ultimaFalha) {
+      // Só mostra banner se a falha é recente (últimos 2 dias)
+      const updatedDate = ultimaFalha.updated_at?.slice(0, 10) ?? "";
+      const limite = new Date();
+      limite.setDate(limite.getDate() - 2);
+      const limiteIso = limite.toISOString().slice(0, 10);
+      if (updatedDate >= limiteIso) {
+        nodes.push(
+          <div
+            key="falha"
+            role="alert"
+            style={{
+              ...errorBox,
+              marginBottom: 12,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <div>
+              <strong>CRON falhou</strong> em {ultimaFalha.data_d1} —{" "}
+              {ultimaFalha.last_error || "erro desconhecido"}
+            </div>
+            <button
+              type="button"
+              onClick={dispararCronManual}
+              style={{ ...btnSecondary, fontSize: 11 }}
+            >
+              Executar agora
+            </button>
+          </div>,
+        );
+      }
+    }
+
+    if (cronStatus.dry_runs_pendentes.length > 0) {
+      nodes.push(
+        <div
+          key="pendentes"
+          role="status"
+          style={{
+            padding: "10px 12px",
+            background: COLORS.warningBg,
+            color: COLORS.warningFg,
+            border: `1px solid ${COLORS.warning}40`,
+            borderRadius: RADIUS.sm,
+            fontSize: 12,
+            marginBottom: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <div>
+            Você tem <strong>{cronStatus.dry_runs_pendentes.length}</strong>{" "}
+            validação(ões) automática(s) dos últimos 3 dias ainda não aplicada(s)
+            no Pipefy.
+          </div>
+          <button
+            type="button"
+            onClick={() => setModalHistoricoAberto(true)}
+            style={{ ...btnSecondary, fontSize: 11 }}
+          >
+            Ver pendentes
+          </button>
+        </div>,
+      );
+    }
+    return nodes.length > 0 ? <div>{nodes}</div> : null;
+  })();
+
   return (
     <>
+      {banners}
       {/* Barra de controles */}
       <section
         style={{
@@ -225,7 +331,7 @@ export function Dashboard() {
             onChange={(e) => setDryRun(e.target.checked)}
             disabled={rodando}
           />
-          Dry run (nao altera Pipefy)
+          Dry run (não altera Pipefy)
         </label>
 
         <button
@@ -374,12 +480,31 @@ export function Dashboard() {
         />
       </section>
 
-      {/* Historico */}
+      {/* Histórico */}
       {historico.length > 0 && (
-        <section style={{ marginTop: 32 }} aria-label="Historico de validacoes">
-          <h2 style={{ fontSize: 16, marginBottom: 10, color: COLORS.text }}>
-            Ultimas validacoes
-          </h2>
+        <section style={{ marginTop: 32 }} aria-label="Histórico de validações">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              marginBottom: 10,
+              gap: 12,
+            }}
+          >
+            <h2 style={{ fontSize: 16, margin: 0, color: COLORS.text }}>
+              Últimas validações
+            </h2>
+            <button
+              ref={verTodasBtnRef}
+              type="button"
+              onClick={() => setModalHistoricoAberto(true)}
+              style={{ ...btnSecondary, fontSize: 12 }}
+              aria-label="Abrir histórico completo com filtros"
+            >
+              Ver todas →
+            </button>
+          </div>
           <div style={{ ...cardPanel, padding: 8 }}>
             {historico.map((h) => (
               <div
@@ -387,7 +512,7 @@ export function Dashboard() {
                 onClick={() => abrirHistorico(h.id, h.data_d1)}
                 role="button"
                 tabIndex={0}
-                aria-label={`Abrir validacao ${h.data_d1} com ${h.total_ocs} OCs`}
+                aria-label={`Abrir validação ${h.data_d1} com ${h.total_ocs} OCs`}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -416,19 +541,50 @@ export function Dashboard() {
                 </span>
                 <span style={{ fontWeight: 600 }}>{h.data_d1}</span>
                 <span>{h.total_ocs} OCs</span>
-                <span style={{ color: COLORS.success }}>{h.aprovadas} aprov</span>
-                <span style={{ color: COLORS.warning }}>{h.divergentes} div</span>
+                <span title="Aprovadas" style={{ color: COLORS.success }}>
+                  {h.aprovadas} aprov.
+                </span>
+                <span title="Divergências" style={{ color: COLORS.warning }}>
+                  {h.divergentes} div.
+                </span>
                 {h.aguardando_ml != null && h.aguardando_ml > 0 && (
-                  <span style={{ color: COLORS.warningAmber }}>{h.aguardando_ml} ML</span>
+                  <span title="Aguardando Mercado Livre" style={{ color: COLORS.warningAmber }}>
+                    {h.aguardando_ml} ML
+                  </span>
                 )}
                 {h.ja_processadas != null && h.ja_processadas > 0 && (
-                  <span style={{ color: COLORS.textMuted }}>{h.ja_processadas} proc</span>
+                  <span title="Já processadas" style={{ color: COLORS.textMuted }}>
+                    {h.ja_processadas} proc.
+                  </span>
+                )}
+                {h.origem === "cron" && (
+                  <span
+                    title="Execução automática pelo CRON das 02:00"
+                    style={{
+                      marginLeft: "auto",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: 0.5,
+                      color: COLORS.primary,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Automático
+                  </span>
                 )}
               </div>
             ))}
           </div>
         </section>
       )}
+
+      <HistoricoModal
+        open={modalHistoricoAberto}
+        onClose={() => setModalHistoricoAberto(false)}
+        onSelecionar={abrirHistorico}
+        triggerRef={verTodasBtnRef}
+      />
+
 
       {/* Loading global */}
       {rodando && (

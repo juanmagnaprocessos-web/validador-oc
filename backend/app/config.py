@@ -139,6 +139,20 @@ class Settings(BaseSettings):
         alias="PIPEFY_FASES_CANCELAMENTO",
     )
 
+    # --- CRON diário ---
+    # Quando habilitado, APScheduler inicia junto com FastAPI e dispara
+    # `run_daily_validation_job` todo dia às `cron_hour_brt:cron_minute`
+    # (timezone BRT explícito). Lock persistente em `cron_locks` impede
+    # dupla execução. Dry-run por default — analista confere e aplica.
+    cron_enabled: bool = Field(False, alias="CRON_ENABLED")
+    cron_hour_brt: int = Field(2, ge=0, le=23, alias="CRON_HOUR_BRT")
+    cron_minute: int = Field(0, ge=0, le=59, alias="CRON_MINUTE")
+    cron_timezone: str = Field("America/Sao_Paulo", alias="CRON_TIMEZONE")
+    cron_misfire_grace_s: int = Field(3600, alias="CRON_MISFIRE_GRACE_S")
+    cron_lock_ttl_s: int = Field(7200, alias="CRON_LOCK_TTL_S")  # 2h
+    cron_retry_delays_min: str = Field("15,45", alias="CRON_RETRY_DELAYS_MIN")
+    cron_dry_run: bool = Field(True, alias="CRON_DRY_RUN")
+
     # --- CORS ---
     cors_origins: str = Field(
         "http://localhost:5173", alias="CORS_ORIGINS"
@@ -194,6 +208,14 @@ class Settings(BaseSettings):
     @property
     def club_request_delay_s(self) -> float:
         return self.club_request_delay_ms / 1000.0
+
+    @property
+    def cron_retry_delays_list(self) -> list[int]:
+        return [
+            int(x.strip())
+            for x in self.cron_retry_delays_min.split(",")
+            if x.strip().isdigit()
+        ]
 
 
 @lru_cache(maxsize=1)
