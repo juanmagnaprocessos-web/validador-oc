@@ -147,7 +147,12 @@ def _connect_postgres() -> _ConnectionWrapper:
     import psycopg
     from psycopg.rows import dict_row
 
-    url = settings.database_url
+    # Remove whitespace interno (espaços, quebras de linha, tabs) que pode
+    # entrar quando DATABASE_URL é colada com wrap no painel do Render/Neon.
+    # psycopg explode com mensagens enigmáticas (ex: "invalid sslmode value:
+    # 'r  equire'") quando o valor chega quebrado. Sanitizar é defensivo e
+    # inofensivo: URLs Postgres válidas não contêm whitespace.
+    url = "".join(settings.database_url.split())
     # Neon aceita channel_binding=require mas psycopg pode nao suportar
     # diretamente — removemos se presente (sslmode=require ja basta).
     if "channel_binding=" in url:
