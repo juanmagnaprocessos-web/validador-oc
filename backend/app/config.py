@@ -197,7 +197,22 @@ class Settings(BaseSettings):
     @property
     def relatorios_full_dir(self) -> Path:
         raw = Path(self.relatorios_dir)
-        p = raw if raw.is_absolute() else BASE_DIR / raw
+
+        if raw.is_absolute():
+            # Caminho absoluto explícito via ENV sempre tem prioridade.
+            p = raw
+        else:
+            # Em produção no Render, o filesystem da aplicação é efêmero — cada
+            # redeploy apaga o que foi escrito lá. O render.yaml declara um
+            # disco persistente de 1GB montado em /data. Se estamos rodando em
+            # produção E /data existe, usar /data/<relatorios_dir>. Caso
+            # contrário (dev local, teste), seguir com BASE_DIR relativo.
+            data_disk = Path("/data")
+            if self.app_env == "production" and data_disk.exists() and data_disk.is_dir():
+                p = data_disk / raw
+            else:
+                p = BASE_DIR / raw
+
         p.mkdir(parents=True, exist_ok=True)
         return p
 
