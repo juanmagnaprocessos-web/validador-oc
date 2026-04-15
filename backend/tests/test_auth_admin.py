@@ -83,18 +83,20 @@ def client(tmp_db):
 # ---------- /auth/me ----------
 
 def test_login_sem_credenciais_401(client):
-    r = client.get("/auth/me")
+    r = client.get("/api/auth/me")
     assert r.status_code == 401
-    assert r.headers.get("www-authenticate", "").lower().startswith("basic")
+    # Propositalmente SEM header `WWW-Authenticate: Basic` — evita popup
+    # nativo do browser (fix commit 4215e10, auto_error=False no HTTPBasic).
+    assert "www-authenticate" not in {k.lower() for k in r.headers.keys()}
 
 
 def test_login_credenciais_invalidas_401(client):
-    r = client.get("/auth/me", auth=(ADMIN_USER, "senha_errada"))
+    r = client.get("/api/auth/me", auth=(ADMIN_USER, "senha_errada"))
     assert r.status_code == 401
 
 
 def test_login_ok_retorna_me(client):
-    r = client.get("/auth/me", auth=(ADMIN_USER, ADMIN_PASS))
+    r = client.get("/api/auth/me", auth=(ADMIN_USER, ADMIN_PASS))
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["username"] == ADMIN_USER
@@ -108,7 +110,7 @@ def test_login_ok_retorna_me(client):
 def test_trocar_senha_obrigatoria_no_primeiro_login(client):
     nova = "novaSenha123"
     r = client.post(
-        "/auth/trocar-senha",
+        "/api/auth/trocar-senha",
         json={"senha_atual": ADMIN_PASS, "nova_senha": nova},
         auth=(ADMIN_USER, ADMIN_PASS),
     )
@@ -116,18 +118,18 @@ def test_trocar_senha_obrigatoria_no_primeiro_login(client):
     assert r.json().get("ok") is True
 
     # Senha velha não funciona mais
-    r_velha = client.get("/auth/me", auth=(ADMIN_USER, ADMIN_PASS))
+    r_velha = client.get("/api/auth/me", auth=(ADMIN_USER, ADMIN_PASS))
     assert r_velha.status_code == 401
 
     # Senha nova funciona e flag de troca foi limpa
-    r_nova = client.get("/auth/me", auth=(ADMIN_USER, nova))
+    r_nova = client.get("/api/auth/me", auth=(ADMIN_USER, nova))
     assert r_nova.status_code == 200
     assert r_nova.json()["must_change_password"] is False
 
 
 def test_trocar_senha_nova_igual_atual_400(client):
     r = client.post(
-        "/auth/trocar-senha",
+        "/api/auth/trocar-senha",
         json={"senha_atual": ADMIN_PASS, "nova_senha": ADMIN_PASS},
         auth=(ADMIN_USER, ADMIN_PASS),
     )
@@ -138,13 +140,13 @@ def test_trocar_senha_nova_igual_atual_400(client):
 
 def test_admin_lista_usuarios_so_admin(client):
     # Admin: ok
-    r_ok = client.get("/admin/usuarios", auth=(ADMIN_USER, ADMIN_PASS))
+    r_ok = client.get("/api/admin/usuarios", auth=(ADMIN_USER, ADMIN_PASS))
     assert r_ok.status_code == 200
     usernames = {u["username"] for u in r_ok.json()}
     assert ADMIN_USER in usernames and COMUM_USER in usernames
 
     # Usuário comum: 403
-    r_403 = client.get("/admin/usuarios", auth=(COMUM_USER, COMUM_PASS))
+    r_403 = client.get("/api/admin/usuarios", auth=(COMUM_USER, COMUM_PASS))
     assert r_403.status_code == 403
 
 
@@ -158,7 +160,7 @@ def test_admin_cria_usuario_e_reseta_senha(client, tmp_db):
         "senha_temporaria": "tempSenha1",
     }
     r_create = client.post(
-        "/admin/usuarios", json=payload, auth=(ADMIN_USER, ADMIN_PASS)
+        "/api/admin/usuarios", json=payload, auth=(ADMIN_USER, ADMIN_PASS)
     )
     assert r_create.status_code == 201, r_create.text
     novo = r_create.json()
@@ -166,12 +168,12 @@ def test_admin_cria_usuario_e_reseta_senha(client, tmp_db):
     assert novo["must_change_password"] is True
 
     # 2) login com a senha temporária funciona
-    r_me = client.get("/auth/me", auth=("novo_user", "tempSenha1"))
+    r_me = client.get("/api/auth/me", auth=("novo_user", "tempSenha1"))
     assert r_me.status_code == 200
 
     # 3) admin reseta a senha
     r_reset = client.post(
-        f"/admin/usuarios/{novo['id']}/reset-senha",
+        f"/api/admin/usuarios/{novo['id']}/reset-senha",
         auth=(ADMIN_USER, ADMIN_PASS),
     )
     assert r_reset.status_code == 200, r_reset.text
@@ -179,15 +181,15 @@ def test_admin_cria_usuario_e_reseta_senha(client, tmp_db):
     assert isinstance(nova_temp, str) and len(nova_temp) >= 8
 
     # 4) senha antiga não funciona; nova sim, e force-change está ligado
-    assert client.get("/auth/me", auth=("novo_user", "tempSenha1")).status_code == 401
-    r_pos = client.get("/auth/me", auth=("novo_user", nova_temp))
+    assert client.get("/api/auth/me", auth=("novo_user", "tempSenha1")).status_code == 401
+    r_pos = client.get("/api/auth/me", auth=("novo_user", nova_temp))
     assert r_pos.status_code == 200
     assert r_pos.json()["must_change_password"] is True
 
 
 def test_admin_nao_pode_se_inativar(client, tmp_db):
     r = client.patch(
-        f"/admin/usuarios/{tmp_db['admin_id']}",
+        f"/api/admin/usuarios/{tmp_db['admin_id']}",
         json={"ativo": False},
         auth=(ADMIN_USER, ADMIN_PASS),
     )
@@ -195,7 +197,7 @@ def test_admin_nao_pode_se_inativar(client, tmp_db):
 
     # E o DELETE também é protegido
     r_del = client.delete(
-        f"/admin/usuarios/{tmp_db['admin_id']}",
+        f"/api/admin/usuarios/{tmp_db['admin_id']}",
         auth=(ADMIN_USER, ADMIN_PASS),
     )
     assert r_del.status_code == 400
