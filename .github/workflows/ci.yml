@@ -32,9 +32,10 @@ jobs:
         run: python -m pytest tests/ -q
         env:
           # Variaveis minimas — testes mockam Club/Pipefy e o config tem defaults.
-          # "off" precisa estar entre aspas em YAML (seria interpretado como false).
+          # CILIA_MODE="stub" é o default de dev (sem rede, dados sintéticos);
+          # test_cilia_stub.test_factory_usa_stub_por_default assume este valor.
           APP_ENV: test
-          CILIA_MODE: "off"
+          CILIA_MODE: "stub"
 
   frontend-build:
     name: Frontend build + typecheck

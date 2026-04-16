@@ -14,6 +14,7 @@ os.environ.setdefault("CILIA_MODE", "stub")
 
 import pytest  # noqa: E402
 
+from app import db as app_db  # noqa: E402
 from app.models import (  # noqa: E402
     CardPipefy,
     Concorrente,
@@ -22,6 +23,11 @@ from app.models import (  # noqa: E402
     OrdemCompra,
     ProdutoCotacao,
 )
+
+# Cria tabelas SQLite antes de qualquer teste importar db (evita
+# `no such table: historico_produtos_oc` no runner CI, onde não há
+# banco pré-existente). init_db() é idempotente (CREATE IF NOT EXISTS).
+app_db.init_db()
 
 
 @pytest.fixture
