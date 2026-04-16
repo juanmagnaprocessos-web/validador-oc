@@ -56,13 +56,16 @@ def test_r7_quantidade_zero_ou_none_sem_divergencia(contexto_ok):
     assert R7QuantidadeSuspeita().validar(contexto_ok) == []
 
 
-def test_r7_nao_bloqueia_oc_com_qtd_maior_1(contexto_ok):
-    """Integração: OC válida em tudo, mas com uma peça qtd=3.
+def test_r7_integrada_em_regras_padrao_nao_eh_bloqueante(contexto_ok):
+    """Regressão do risco detectado no code review: se R7 fosse ALERTA,
+    a OC seria movida para 'Informações Incorretas' pelo orchestrator
+    (Severidade.ERRO/ALERTA → FasePipefy.INFORMACOES_INCORRETAS).
 
-    Regressão do risco detectado no code review: se R7 fosse ALERTA,
-    esta OC seria movida para 'Informações Incorretas'. Com INFO, não há
-    bloqueante e o orchestrator mantém status APROVADA.
+    Verificamos apenas divergências R7 para isolar do estado ambiental
+    de outras regras (R2 acessa SQLite `historico_produtos_oc`, que pode
+    não existir em ambientes de teste minimalistas).
     """
+    contexto_ok.historico_indexado = {}  # pula SQLite no R2 cross-time
     contexto_ok.produtos_cotacao = [
         ProdutoCotacao(
             produto_id="p1", descricao="FAROL", quantidade=1,
@@ -77,15 +80,17 @@ def test_r7_nao_bloqueia_oc_com_qtd_maior_1(contexto_ok):
     divs_r7 = [d for d in divs if d.regra == "R7"]
     assert len(divs_r7) == 1
     assert divs_r7[0].severidade == Severidade.INFO
-    bloqueantes = [
-        d for d in divs
-        if d.severidade in (Severidade.ERRO, Severidade.ALERTA)
-    ]
-    assert bloqueantes == [], f"Bloqueantes inesperados: {[d.titulo for d in bloqueantes]}"
+    # R7 especificamente nunca pode gerar ERRO ou ALERTA — isso bloquearia OC.
+    assert not any(
+        d.regra == "R7"
+        and d.severidade in (Severidade.ERRO, Severidade.ALERTA)
+        for d in divs
+    )
 
 
 def test_r7_convive_com_r2_duplicidade(contexto_ok):
     """Mesma peça em 2 linhas + uma das linhas com qtd>1 gera R2 + R7."""
+    contexto_ok.historico_indexado = {}  # isola do SQLite no R2 cross-time
     contexto_ok.produtos_cotacao = [
         ProdutoCotacao(
             produto_id="p1", descricao="OLEO", quantidade=3,
