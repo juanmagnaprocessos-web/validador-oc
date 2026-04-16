@@ -304,6 +304,7 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                       {p.quantidade}
                       {(p.quantidade ?? 0) > 1 && (
                         <div
+                          aria-label={`Quantidade ${p.quantidade} unidades — conferir no CILIA`}
                           title="Quantidade > 1 na mesma linha — conferir no CILIA se bate com pedido/placa"
                           style={{
                             fontSize: 9,
@@ -312,7 +313,7 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                             marginTop: 2,
                           }}
                         >
-                          {"\u26a0"} Conferir CILIA
+                          {"\u26a0"} {p.quantidade} un. — conferir CILIA
                         </div>
                       )}
                     </td>

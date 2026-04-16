@@ -4,9 +4,14 @@ Peças em par naturais (farol direito/esquerdo, retrovisor, defletor) vêm
 do Club como linhas SEPARADAS, com EAN próprio por lado — logo não caem
 aqui. Quando uma única linha tem `quantidade > 1` (ex.: 3 litros de óleo,
 2 filtros), o analista precisa confirmar manualmente no CILIA que a
-quantidade bate com o pedido/placa antes de aprovar. Esta regra emite um
-ALERTA por linha suspeita para garantir que a conferência apareça no
-dashboard — ela não bloqueia a aprovação automática.
+quantidade bate com o pedido/placa antes de aprovar.
+
+Severidade INFO (não bloqueia): `orchestrator._decidir_fase` e
+`motivo_resumido` só reagem a ERRO/ALERTA — R7 aparece no dashboard
+(badge na tabela de peças + lista de divergências) e no registro de
+ações planejadas, mas não reprova a OC nem move o card. Alert fatigue
+seria inevitável se ALERTA fosse usado (óleo/fluido/filtros com qtd>1
+são compras diárias comuns).
 """
 from __future__ import annotations
 
@@ -39,7 +44,7 @@ class R7QuantidadeSuspeita(Regra):
                         "linha da cotação. Validar no CILIA se a quantidade "
                         "bate com o pedido/placa antes de aprovar."
                     ),
-                    severidade=Severidade.ALERTA,
+                    severidade=Severidade.INFO,
                     dados={
                         "descricao_peca": descricao_peca,
                         "quantidade": qtd,
