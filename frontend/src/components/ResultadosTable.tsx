@@ -300,7 +300,22 @@ function DetalheOC({ r, ciliaMode, ciliaBaseUrl }: { r: OcResultado; ciliaMode?:
                     <td style={{ padding: "6px 8px", fontWeight: isReincidente ? 600 : 400 }}>
                       {p.descricao || "--"}
                     </td>
-                    <td style={{ padding: "6px 8px", textAlign: "right" }}>{p.quantidade}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      {p.quantidade}
+                      {(p.quantidade ?? 0) > 1 && (
+                        <div
+                          title="Quantidade > 1 na mesma linha — conferir no CILIA se bate com pedido/placa"
+                          style={{
+                            fontSize: 9,
+                            color: COLORS.warningFg,
+                            fontWeight: 700,
+                            marginTop: 2,
+                          }}
+                        >
+                          {"\u26a0"} Conferir CILIA
+                        </div>
+                      )}
+                    </td>
                     {(() => {
                       // Valor por peca (preferencial); fallback para global da OC.
                       const cotacoesPeca =
