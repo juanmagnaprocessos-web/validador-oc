@@ -536,6 +536,93 @@ class ClubClient:
         except Exception:
             return None
 
+    async def listar_produtos_por_placa(
+        self,
+        placa: str,
+        data_inicio: date,
+        data_fim: date,
+    ) -> list[dict[str, Any]]:
+        """GET /api/getprodutosrelatoriocliente?identifier={placa}&dateIni&dateFim
+
+        Retorna TODOS os produtos comprados para a placa no periodo,
+        com a OC (id_pedido), cotacao (id_cotacao), data, fornecedor e valores.
+        Eh o mesmo endpoint usado pelo relatorio Club > Produtos por placa.
+
+        Fonte autoritativa para a R2 cross-time: cobre OCs antigas em que
+        request.obs nao tem a placa indexada (caso em que listar_pedidos_v3
+        nao consegue mapear a OC para a placa).
+
+        Importante: NAO enviar `groupBy=pe.id_pedido,pe.id_vendedor` (filtro
+        usado pela tela de impressao colapsa duplicatas e oculta pecas
+        recompradas em OCs distintas — exatamente o que o R2 precisa ver).
+
+        Limitacao do Club: o endpoint rejeita janelas maiores que 6 meses
+        (HTTP 422). Janelas maiores sao quebradas em chunks de ~180 dias
+        e os resultados sao concatenados (com dedupe por
+        (id_pedido, ean ou cod_interno ou produto_id ou indice)).
+
+        Defense-in-depth: a placa eh validada contra `_RE_PLACA` antes do
+        request — protege contra chamada com identifier vazio/invalido
+        que poderia retornar dados de outras placas.
+        """
+        from datetime import timedelta as _td
+
+        if not _RE_PLACA.fullmatch(placa or ""):
+            raise ValueError(f"placa invalida para listar_produtos_por_placa")
+        if data_fim < data_inicio:
+            return []
+
+        MAX_DIAS = 180  # 6 meses (limite duro do Club)
+        url = f"{self._base_v1}/getprodutosrelatoriocliente"
+
+        # Quebrar em chunks se necessario
+        chunks: list[tuple[date, date]] = []
+        cursor_fim = data_fim
+        while cursor_fim >= data_inicio:
+            cursor_ini = max(data_inicio, cursor_fim - _td(days=MAX_DIAS - 1))
+            chunks.append((cursor_ini, cursor_fim))
+            if cursor_ini == data_inicio:
+                break
+            cursor_fim = cursor_ini - _td(days=1)
+
+        todos: list[dict[str, Any]] = []
+        vistos: set[tuple[str, str]] = set()
+        for ini, fim in chunks:
+            params: dict[str, Any] = {
+                "identifier": placa,
+                "dateIni": ini.strftime("%Y-%m-%d"),
+                "dateFim": fim.strftime("%Y-%m-%d"),
+                "ordenar": "data_geracao",
+                "tipoorder": "desc",
+                "imprimir": "true",
+            }
+            data = await self._request("GET", url, params=params)
+            produtos: list[dict[str, Any]] = []
+            if isinstance(data, dict):
+                produtos = data.get("produtos") or []
+                if not isinstance(produtos, list):
+                    produtos = []
+            elif isinstance(data, list):
+                produtos = data
+            for idx, p in enumerate(produtos):
+                # Dedupe key com fallback em cascata para evitar colapso
+                # quando ean vier vazio em multiplos items do mesmo pedido.
+                ident_peca = (
+                    str(p.get("ean") or "").strip()
+                    or str(p.get("pro_ean") or "").strip()
+                    or str(p.get("cod_interno") or "").strip()
+                    or str(p.get("produto_id") or "").strip()
+                    or str(p.get("pro_id") or "").strip()
+                    or f"idx:{len(todos) + idx}"
+                )
+                chave = (str(p.get("id_pedido") or "").strip(), ident_peca)
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                todos.append(p)
+
+        return todos
+
     async def listar_fornecedores(self) -> list[dict[str, Any]]:
         """GET /api/getfornecedorescliente — referência para R5."""
         url = f"{self._base_v1}/getfornecedorescliente"

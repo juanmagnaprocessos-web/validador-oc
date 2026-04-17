@@ -612,6 +612,86 @@ def _buscar_historico_placa_club(
     return items_historicos
 
 
+def _formatar_placa_para_club(placa_norm: str) -> str | None:
+    """Converte placa normalizada (sem hifen) para o formato esperado pelo
+    endpoint do Club (`identifier=AAA-9999` ou `AAA-9A99`).
+
+    Placas brasileiras tem 7 caracteres; o hifen sempre vai entre o 3o e o 4o.
+    Retorna None se a entrada nao parece uma placa valida — protege contra
+    chamada com `identifier=""` que faria o Club retornar TODAS as compras
+    do cliente.
+    """
+    if not placa_norm:
+        return None
+    # Limpa whitespace ASCII e Unicode (ex: NBSP \xa0)
+    p = "".join(placa_norm.split()).upper().replace("-", "")
+    if len(p) != 7:
+        return None
+    return f"{p[:3]}-{p[3:]}"
+
+
+def _normalizar_relatorio_produtos_placa(
+    placa_normalizada: str,
+    raw: list[dict[str, Any]],
+    *,
+    id_pedido_atual: str,
+) -> list[dict[str, Any]]:
+    """Converte a resposta de `listar_produtos_por_placa` em items no formato
+    de `historico_items_por_placa` (mesmas chaves que `_buscar_historico_placa_club`).
+
+    O endpoint /api/getprodutosrelatoriocliente retorna um item por (OC, peca):
+      - id_pedido / id_cotacao
+      - data_geracao (str "YYYY-MM-DD HH:MM:SS")
+      - pro_descricao / produto (descricao da peca)
+      - ean (na verdade eh o codigo interno do Club, ex: "132888"; bate com
+        product.ean do get_order_details — confirmado por inspecao manual)
+      - nomeFornecedor / for_id
+      - quantidade
+
+    Items com id_pedido == id_pedido_atual sao filtrados para evitar self-match.
+    """
+    if not placa_normalizada or not raw:
+        return []
+    id_atual = str(id_pedido_atual or "").strip()
+    out: list[dict[str, Any]] = []
+    for p in raw:
+        id_pedido = str(p.get("id_pedido") or "").strip()
+        if not id_pedido or id_pedido == id_atual:
+            continue
+        desc_raw = p.get("pro_descricao") or p.get("produto") or ""
+        ean_raw = p.get("ean") or p.get("pro_ean")
+        cod_raw = p.get("cod_interno")
+        chave = chave_produto(
+            ean=str(ean_raw) if ean_raw is not None else None,
+            codigo=str(cod_raw) if cod_raw is not None else None,
+            descricao=str(desc_raw) if desc_raw else None,
+        )
+        data_geracao = p.get("data_geracao") or ""
+        data_oc_iso = ""
+        if data_geracao:
+            # "2026-02-17 10:52:44" -> "2026-02-17"
+            data_oc_iso = str(data_geracao).split(" ", 1)[0]
+        forn_id_raw = p.get("for_id")
+        forn_id = str(forn_id_raw) if forn_id_raw is not None else None
+        forn_nome = p.get("nomeFornecedor")
+        out.append({
+            "id_pedido": id_pedido,
+            "id_cotacao": str(p.get("id_cotacao") or "") or None,
+            "data_oc": data_oc_iso,
+            "identificador": placa_normalizada,
+            "placa_normalizada": placa_normalizada,
+            "chave_produto": chave,
+            "descricao": desc_raw,
+            "descricao_normalizada": str(desc_raw).strip().lower() if desc_raw else "",
+            "fornecedor_id": forn_id,
+            "fornecedor_nome": forn_nome,
+            "quantidade": float(p.get("quantidade") or 0),
+            "card_pipefy_id": None,  # fonte Club — sem card associado
+            "fonte_historico": "relatorio_placa_club",
+        })
+    return out
+
+
 def _indexar_historico_por_chave(
     items: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -1827,6 +1907,87 @@ async def _executar_validacao_impl(
             except Exception as e:
                 logger.error(
                     "Falha ao mergear cache_devolucoes no historico R2: %s",
+                    e,
+                )
+
+        # 4a FONTE DE HISTORICO: relatorio Club por placa
+        # (/api/getprodutosrelatoriocliente?identifier=PLACA).
+        # Eh a fonte autoritativa: cobre OCs antigas em que request.obs nao
+        # tem a placa (caso em que listar_pedidos_v3 nao mapeia a OC para a
+        # placa) e OCs sem card no Pipefy. Sem groupBy, traz todos os
+        # produtos individuais — exatamente o que o R2 cross-time precisa.
+        if (
+            settings.r2_modo != "off"
+            and settings.r2_fonte_historico == "pipefy"
+            and placas_unicas
+        ):
+            # janela_rel_fim = D-2: D-1 atual eh injetado depois pelo bloco
+            # 4d.2 (intra-batch). Sem essa exclusao, OCs do D-1 ficariam
+            # duplicadas no `historico_items_por_placa` (o dedupe por
+            # (id_pedido, chave_produto) cobre 99% dos casos, mas a
+            # exclusao explicita evita inflar memoria e altera de qual
+            # fonte vem `reincidencias[0]` no R2.
+            janela_rel_ini = data_d1 - timedelta(days=settings.r2_janela_dias)
+            janela_rel_fim = data_d1 - timedelta(days=1)
+            sem_rel = asyncio.Semaphore(concorrencia)
+
+            async def _buscar_relatorio_placa(placa_norm: str):
+                placa_fmt = _formatar_placa_para_club(placa_norm)
+                if not placa_fmt:
+                    # Guard contra chamada perigosa (ex: identifier=""
+                    # retornaria TODAS as compras do cliente).
+                    return placa_norm, []
+                # Mascara placa em log (PII fraca + log forging).
+                placa_log = f"{placa_fmt[:3]}***"
+                async with sem_rel:
+                    try:
+                        raw = await club.listar_produtos_por_placa(
+                            placa_fmt, janela_rel_ini, janela_rel_fim,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Falha relatorio Club por placa %s: %s",
+                            placa_log, e,
+                        )
+                        return placa_norm, []
+                items = _normalizar_relatorio_produtos_placa(
+                    placa_norm, raw, id_pedido_atual="",
+                )
+                return placa_norm, items
+
+            try:
+                resultados_rel = await asyncio.gather(
+                    *[_buscar_relatorio_placa(p) for p in placas_unicas]
+                )
+                total_rel_merged = 0
+                for placa, items in resultados_rel:
+                    if not items:
+                        continue
+                    existing = {
+                        (str(it.get("id_pedido") or "").strip(),
+                         it.get("chave_produto") or "")
+                        for it in historico_items_por_placa.get(placa, [])
+                    }
+                    novos = [
+                        it for it in items
+                        if (str(it.get("id_pedido") or "").strip(),
+                            it.get("chave_produto") or "") not in existing
+                    ]
+                    if novos:
+                        historico_items_por_placa.setdefault(
+                            placa, []
+                        ).extend(novos)
+                        total_rel_merged += len(novos)
+                if total_rel_merged:
+                    logger.info(
+                        "Relatorio Club por placa: %d items complementares "
+                        "mergeados (%d items totais agora)",
+                        total_rel_merged,
+                        sum(len(v) for v in historico_items_por_placa.values()),
+                    )
+            except Exception as e:
+                logger.error(
+                    "Falha ao mergear relatorio Club por placa no historico R2: %s",
                     e,
                 )
 

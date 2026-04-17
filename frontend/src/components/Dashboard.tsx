@@ -247,6 +247,37 @@ export function Dashboard() {
       }
     }
 
+    if (cronStatus.pendente_execucao) {
+      const pe = cronStatus.pendente_execucao;
+      nodes.push(
+        <div
+          key="pendente-execucao"
+          role="alert"
+          style={{
+            ...errorBox,
+            marginBottom: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <div>
+            <strong>CRON não executou</strong> hoje às {pe.horario_esperado} —
+            sem registro para o D-1 {pe.data_d1}. App pode ter dormido (Render
+            free) ou o agendador não disparou.
+          </div>
+          <button
+            type="button"
+            onClick={dispararCronManual}
+            style={{ ...btnSecondary, fontSize: 11 }}
+          >
+            Executar agora
+          </button>
+        </div>,
+      );
+    }
+
     if (cronStatus.dry_runs_pendentes.length > 0) {
       nodes.push(
         <div
