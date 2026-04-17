@@ -1280,6 +1280,85 @@ def ultima_falha_cron() -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def cron_pendente_de_execucao() -> dict[str, Any] | None:
+    """Detecta se o CRON deveria ter executado hoje mas nao ha registro
+    valido (cobre tres cenarios silenciosos):
+
+      A) App dormiu (Render free) — APScheduler nunca disparou e nao
+         existe linha em `cron_locks` para D-1.
+      B) Lock travado em status='rodando' com expires_at < now (processo
+         crashou no meio da execucao). Sem essa deteccao, o banner
+         `ultima_falha` nao aparece (status nao eh 'falha').
+      C) D-1 ja foi processado via fluxo manual (`POST /api/validar`)
+         que nao escreve em `cron_locks`. Nesses casos NAO mostra banner.
+
+    Retorna {"data_d1": "...", "horario_esperado": "HH:MM"} se:
+      - Hoje ja passou da hora agendada do CRON em BRT
+      - NAO ha registro valido em cron_locks para D-1 (rodando expirado
+        conta como invalido)
+      - NAO existe linha em `validacoes` para D-1
+
+    Retorna None caso contrario, ou se CRON desabilitado.
+    """
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+
+    if not settings.cron_enabled:
+        return None
+
+    try:
+        tz = ZoneInfo(settings.cron_timezone)
+    except Exception:
+        return None  # timezone mal configurada — nao bloqueia o endpoint
+
+    agora = datetime.now(tz)
+    horario_esperado_hoje = agora.replace(
+        hour=settings.cron_hour_brt,
+        minute=settings.cron_minute,
+        second=0,
+        microsecond=0,
+    )
+    if agora < horario_esperado_hoje:
+        return None
+
+    data_d1_esperada = (agora.date() - timedelta(days=1)).isoformat()
+    agora_iso = agora.replace(tzinfo=None).isoformat(timespec="seconds")
+    with get_conn() as conn:
+        # Lock valido = qualquer status com expires_at no futuro,
+        # OU status terminal (sucesso/vazio/falha) que ja registrou
+        # tentativa — banners de falha/sucesso cobrem esses casos.
+        # Lock 'rodando' com expires_at vencido NAO conta como valido.
+        lock = conn.execute(
+            "SELECT status, expires_at FROM cron_locks WHERE data_d1 = ?",
+            (data_d1_esperada,),
+        ).fetchone()
+        if lock is not None:
+            status = lock["status"] if hasattr(lock, "__getitem__") else lock[0]
+            expires_at = lock["expires_at"] if hasattr(lock, "__getitem__") else lock[1]
+            lock_valido = (
+                status in ("sucesso", "vazio", "falha")
+                or (status == "rodando" and expires_at and str(expires_at) > agora_iso)
+            )
+            if lock_valido:
+                return None
+
+        # Validacao manual (sem CRON) tambem cobre o D-1
+        val = conn.execute(
+            "SELECT 1 FROM validacoes WHERE data_d1 = ? LIMIT 1",
+            (data_d1_esperada,),
+        ).fetchone()
+        if val is not None:
+            return None
+
+    return {
+        "data_d1": data_d1_esperada,
+        "horario_esperado": (
+            f"{settings.cron_hour_brt:02d}:{settings.cron_minute:02d}"
+        ),
+    }
+
+
 def dry_runs_cron_pendentes(dias: int = 3) -> list[dict[str, Any]]:
     """Validações CRON em dry-run dos últimos N dias ainda não aplicadas.
 

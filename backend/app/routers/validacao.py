@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 from datetime import date
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
@@ -15,6 +16,7 @@ from app.db import (
     dry_runs_cron_pendentes,
     listar_historico,
     resultados_de,
+    cron_pendente_de_execucao,
     ultima_falha_cron,
     ultimo_cron_lock,
 )
@@ -147,6 +149,7 @@ async def cron_status(_: Usuario = Depends(get_current_user)):
         "dry_run": settings.cron_dry_run,
         "ultimo_lock": ultimo_cron_lock(),
         "ultima_falha": ultima_falha_cron(),
+        "pendente_execucao": cron_pendente_de_execucao(),
         "dry_runs_pendentes": dry_runs_cron_pendentes(dias=3),
     }
 
@@ -189,6 +192,55 @@ async def cron_run_now(
     _cron_tasks.add(task)
     task.add_done_callback(_cron_tasks.discard)
     return {"status": "disparado", "data_d1": data_d1 or "ontem-BRT"}
+
+
+@router.post("/cron/trigger")
+async def cron_trigger_externo(
+    x_cron_token: str | None = Header(default=None, alias="X-Cron-Token"),
+):
+    """Disparo do CRON via servico externo (cron-job.org / UptimeRobot).
+
+    Autenticacao via header `X-Cron-Token` comparado com a ENV
+    `CRON_TRIGGER_TOKEN` em tempo constante (`secrets.compare_digest`).
+    Endpoint dedicado, sem `data_d1` opcional — sempre processa o D-1
+    em BRT, blindando contra backfill abusivo se o token vazar.
+
+    Comportamento:
+      - Sem ENV CRON_TRIGGER_TOKEN: 503 (endpoint nao opera).
+      - Header ausente / token errado: 403 (mesma resposta nos dois casos).
+      - Token correto: dispara `run_daily_validation_job(None)` em background.
+      - Lock atomico em `cron_locks` impede dupla execucao se o servico
+        externo retentar.
+
+    Logs nao registram o token nem a placa de OCs.
+    """
+    expected = settings.cron_trigger_token
+    if not expected:
+        raise HTTPException(503, "trigger externo nao configurado")
+    # Resposta uniforme para missing / invalid evita user enumeration
+    candidate = x_cron_token or ""
+    if not secrets.compare_digest(candidate, expected):
+        # Pequeno delay reduz brute-force trivial sem degradar uso legitimo
+        await asyncio.sleep(0.5)
+        raise HTTPException(403, "forbidden")
+
+    from app.services.cron_runner import run_daily_validation_job
+
+    ultimo = ultimo_cron_lock()
+    if ultimo and ultimo.get("status") == "rodando":
+        # Lock 'rodando' valido bloqueia dupla disparada
+        return {"status": "ja_em_execucao", "data_d1": ultimo.get("data_d1")}
+
+    async def _dispatch():
+        try:
+            await run_daily_validation_job(data_d1_override=None)
+        except Exception:
+            logging.getLogger(__name__).exception("CRON trigger externo falhou")
+
+    task = asyncio.create_task(_dispatch())
+    _cron_tasks.add(task)
+    task.add_done_callback(_cron_tasks.discard)
+    return {"status": "disparado"}
 
 
 @router.get("/config")

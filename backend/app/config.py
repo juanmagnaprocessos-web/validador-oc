@@ -149,9 +149,17 @@ class Settings(BaseSettings):
     cron_minute: int = Field(0, ge=0, le=59, alias="CRON_MINUTE")
     cron_timezone: str = Field("America/Sao_Paulo", alias="CRON_TIMEZONE")
     cron_misfire_grace_s: int = Field(3600, alias="CRON_MISFIRE_GRACE_S")
-    cron_lock_ttl_s: int = Field(7200, alias="CRON_LOCK_TTL_S")  # 2h
-    cron_retry_delays_min: str = Field("15,45", alias="CRON_RETRY_DELAYS_MIN")
+    # TTL deve cobrir: 1ª execução + maior delay de retry + 2ª execução + folga.
+    # Default: 4h (cobre 2h de espera entre tentativas + execução de ~1h).
+    cron_lock_ttl_s: int = Field(14400, alias="CRON_LOCK_TTL_S")  # 4h
+    # Retry delays em minutos (CSV). Default: "120" = 1 retry apos 2h.
+    # Total de tentativas = 1 inicial + len(retry_delays).
+    cron_retry_delays_min: str = Field("120", alias="CRON_RETRY_DELAYS_MIN")
     cron_dry_run: bool = Field(True, alias="CRON_DRY_RUN")
+    # Token compartilhado para trigger externo (cron-job.org). Sem default.
+    # Se vazio, endpoint /api/cron/trigger retorna 503 — endpoint nao
+    # aceita ausencia de token como autorizada.
+    cron_trigger_token: str = Field("", alias="CRON_TRIGGER_TOKEN")
 
     # --- CORS ---
     cors_origins: str = Field(

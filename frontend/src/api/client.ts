@@ -140,12 +140,18 @@ export interface CronLock {
   updated_at: string;
 }
 
+export interface CronPendenteExecucao {
+  data_d1: string;
+  horario_esperado: string;
+}
+
 export interface CronStatus {
   enabled: boolean;
   hora_brt: string;
   dry_run: boolean;
   ultimo_lock: CronLock | null;
   ultima_falha: CronLock | null;
+  pendente_execucao: CronPendenteExecucao | null;
   dry_runs_pendentes: HistoricoEntry[];
 }
 
