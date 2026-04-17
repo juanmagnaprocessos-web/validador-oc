@@ -110,8 +110,10 @@ async def api_root():
     return info
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
+    """Liveness probe. Aceita GET e HEAD (UptimeRobot plano gratuito so
+    oferece HEAD)."""
     return {"status": "ok"}
 
 
