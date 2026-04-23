@@ -41,6 +41,18 @@ class ClubAPIError(Exception):
     """Erro genérico da API do Club."""
 
 
+class ClubNotFoundError(Exception):
+    """404 do Club — recurso nao existe. Tratada como erro do cliente
+    (id invalido), NAO como sinal de API fora do ar. Por isso eh
+    ignorada pelo circuit breaker."""
+
+
+# IDs de pedido no Club sao inteiros — usado para rejeitar entradas
+# nao-numericas (ex: codigo_oc = "MAGNA-001" vindo do Pipefy) antes
+# de fazer a chamada, evitando 404s que consumiriam o breaker.
+_RE_ID_PEDIDO = re.compile(r"^\d+$")
+
+
 class ClubClient:
     """Cliente assíncrono com refresh de token e rate limiting suave."""
 
@@ -56,7 +68,13 @@ class ClubClient:
         self._base_v3 = settings.club_api_base_v3
         self._token: str | None = None
         self._last_request_at: float = 0.0
-        self._breaker = CircuitBreaker("club", fail_threshold=5, reset_timeout=60)
+        self._breaker = CircuitBreaker(
+            "club",
+            fail_threshold=5,
+            reset_timeout=60,
+            # 404 nao indica Club fora do ar — nao conta pro threshold
+            ignored_excs=(ClubNotFoundError,),
+        )
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"User-Agent": "validador-oc/0.1 (Magna Protecao)"},
@@ -181,6 +199,13 @@ class ClubClient:
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise ClubAPIError(
                         f"{resp.status_code} em {url}: {resp.text[:200]}"
+                    )
+
+                if resp.status_code == 404:
+                    # Recurso nao existe — erro do cliente, nao do Club.
+                    # Usa exception propria pra ser ignorada pelo breaker.
+                    raise ClubNotFoundError(
+                        f"404 em {url}: {resp.text[:200]}"
                     )
 
                 if resp.status_code >= 400:
@@ -512,8 +537,21 @@ class ClubClient:
         return resultado
 
     async def get_order_details(self, id_pedido: str | int) -> dict[str, Any]:
-        """GET /v3/api/clients/orders/{id} — detalhes completos com items[]."""
-        url = f"{self._base_v3}/clients/orders/{id_pedido}"
+        """GET /v3/api/clients/orders/{id} — detalhes completos com items[].
+
+        Valida que `id_pedido` eh numerico ANTES de chamar a rede. Cards
+        do Pipefy com `codigo_oc` invalido (ex: "MAGNA-001") chegavam ate
+        aqui, geravam 404 e consumiam o circuit breaker — bloqueando
+        chamadas legitimas subsequentes. Com a validacao, esses casos
+        levantam ValueError que eh tratado pelos callers sem tocar rede
+        nem breaker.
+        """
+        s = str(id_pedido).strip()
+        if not _RE_ID_PEDIDO.match(s):
+            raise ValueError(
+                f"id_pedido invalido (esperado numero inteiro): {id_pedido!r}"
+            )
+        url = f"{self._base_v3}/clients/orders/{s}"
         return await self._request("GET", url)
 
     async def get_valor_oc(self, id_pedido: str | int) -> Decimal | None:

@@ -25,17 +25,24 @@ class CircuitBreakerOpen(Exception):
 
 class CircuitBreaker:
     """Circuit breaker in-process, thread-safe o suficiente para asyncio
-    single-thread (event loop unico)."""
+    single-thread (event loop unico).
+
+    Parametro `ignored_excs`: tupla de excecoes que devem ser propagadas
+    SEM contar como falha (ex: 404 / erro de cliente — nao sinaliza que
+    a API esta fora do ar, apenas que o recurso nao existe).
+    """
 
     def __init__(
         self,
         name: str,
         fail_threshold: int = 5,
         reset_timeout: float = 60.0,
+        ignored_excs: tuple[type[BaseException], ...] = (),
     ) -> None:
         self.name = name
         self.fail_threshold = fail_threshold
         self.reset_timeout = reset_timeout
+        self.ignored_excs = ignored_excs
         self.state = CircuitState.CLOSED
         self.failures = 0
         self.last_failure_time = 0.0
@@ -62,6 +69,9 @@ class CircuitBreaker:
                 self.state = CircuitState.CLOSED
             self.failures = 0
             return result
+        except self.ignored_excs:
+            # Erro de cliente (ex: 404) — propaga sem contar
+            raise
         except Exception:
             self.failures += 1
             self.last_failure_time = time.monotonic()
