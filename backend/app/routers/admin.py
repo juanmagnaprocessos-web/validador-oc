@@ -316,3 +316,31 @@ async def historico_status(user: Usuario = Depends(require_admin)):
         "ultimo_dia_processado": ultimo,
         "periodo_consultado": f"{data_min.isoformat()} a {data_max.isoformat()}",
     }
+
+
+# ---- Tentativas de login (log + forense) ----
+@admin_router.get("/login-attempts")
+async def listar_login_attempts(
+    limite: int = Query(100, ge=1, le=500),
+    ip: str | None = Query(None, description="Filtra por IP exato"),
+    username: str | None = Query(None, description="Filtra por username"),
+    resultado: str | None = Query(
+        None,
+        description=(
+            "sucesso | senha_errada | usuario_inexistente | "
+            "usuario_desativado | rate_limited_ip | rate_limited_usuario | "
+            "credenciais_ausentes"
+        ),
+    ),
+    user: Usuario = Depends(require_admin),
+):
+    """Lista tentativas de login recentes (log do rate limiter).
+
+    Usado para auditoria forense e diagnostico de rate limit. Admin-only.
+    """
+    from app.db import listar_tentativas_login
+
+    rows = listar_tentativas_login(
+        limite=limite, ip=ip, username=username, resultado=resultado,
+    )
+    return {"total": len(rows), "tentativas": rows}

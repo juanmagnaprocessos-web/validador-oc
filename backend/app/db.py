@@ -226,6 +226,32 @@ CREATE TABLE IF NOT EXISTS cron_locks (
     last_error    TEXT,
     updated_at    TEXT    NOT NULL
 );
+
+-- Log de tentativas de autenticacao (sucesso e falha). Serve a dois
+-- propositos: (1) auditoria forense, (2) storage persistente do rate
+-- limiter — contador vem de COUNT(*) WHERE ip=? AND ts > ? AND
+-- resultado != 'sucesso'. Persistencia em SQL garante que reinicio
+-- do app (hibernacao no Render Free) nao zere o contador.
+--
+-- resultado: 'sucesso' | 'senha_errada' | 'usuario_inexistente' |
+--            'usuario_desativado' | 'rate_limited_ip' |
+--            'rate_limited_usuario' | 'credenciais_ausentes'
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT    NOT NULL,            -- ISO-8601 UTC
+    ip          TEXT    NOT NULL,            -- IPv4 ou IPv6 ja normalizado (/64 em v6)
+    username    TEXT    NOT NULL,            -- username tentado (mesmo se nao existir)
+    user_agent  TEXT,                         -- truncado em 500 chars
+    resultado   TEXT    NOT NULL,
+    rota        TEXT                          -- path do endpoint atacado (opcional)
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ts
+    ON login_attempts(ts);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_ts
+    ON login_attempts(ip, ts);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_user_ts
+    ON login_attempts(ip, username, ts);
 """
 
 
@@ -776,6 +802,136 @@ def registrar_login(usuario_id: int) -> None:
             (datetime.now().isoformat(timespec="seconds"), usuario_id),
         )
         conn.commit()
+
+
+# ---------- login_attempts: log + rate limiter backend ----------
+
+def registrar_tentativa_login(
+    *,
+    ts: str,
+    ip: str,
+    username: str,
+    user_agent: str | None,
+    resultado: str,
+    rota: str | None = None,
+) -> None:
+    """Insere uma linha em login_attempts. `ts` deve vir pronto em ISO-8601
+    (UTC) — o caller controla pra permitir mock de tempo nos testes."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO login_attempts
+               (ts, ip, username, user_agent, resultado, rota)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ts, ip, username or "", user_agent, resultado, rota),
+        )
+        conn.commit()
+
+
+def contar_falhas_recentes(
+    *,
+    ip: str,
+    username: str | None,
+    desde_iso: str,
+) -> int:
+    """Conta tentativas NAO-sucesso desde `desde_iso` (exclusivo). Se
+    username fornecido, chave = (ip, username). Caso contrario, so (ip).
+
+    Observacao: conta qualquer resultado que nao seja 'sucesso' — inclui
+    tentativas previamente rate_limited pra evitar 'piscar' (atacante que
+    atingiu o teto e espera um pouco teria o contador reinserindo essas
+    linhas)."""
+    sql = (
+        "SELECT COUNT(*) AS n FROM login_attempts "
+        "WHERE ip = ? AND ts > ? AND resultado != 'sucesso'"
+    )
+    params: list[Any] = [ip, desde_iso]
+    if username is not None:
+        sql += " AND LOWER(username) = LOWER(?)"
+        params.append(username)
+    with get_conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def listar_tentativas_login(
+    *,
+    limite: int = 100,
+    ip: str | None = None,
+    username: str | None = None,
+    resultado: str | None = None,
+) -> list[dict[str, Any]]:
+    """Lista tentativas mais recentes pra endpoint admin."""
+    filtros = []
+    params: list[Any] = []
+    if ip:
+        filtros.append("ip = ?")
+        params.append(ip)
+    if username:
+        filtros.append("LOWER(username) = LOWER(?)")
+        params.append(username)
+    if resultado:
+        filtros.append("resultado = ?")
+        params.append(resultado)
+    where = (" WHERE " + " AND ".join(filtros)) if filtros else ""
+    limite = max(1, min(500, int(limite)))
+    sql = (
+        f"SELECT id, ts, ip, username, user_agent, resultado, rota "
+        f"FROM login_attempts{where} ORDER BY ts DESC LIMIT {limite}"
+    )
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def unlock_tentativas_login(
+    *,
+    username: str | None = None,
+    ip: str | None = None,
+    janela_horas: int = 24,
+) -> int:
+    """Deleta tentativas NAO-sucesso dentro da janela (default 24h) que
+    correspondam aos filtros. Usado pelo CLI de emergencia quando um admin
+    fica preso. Pelo menos um filtro (username OU ip) e obrigatorio.
+
+    IMPORTANTE: so apaga dentro da `janela_horas` — preserva historico
+    forense mais antigo. Se atacante persistir por semanas, o log completo
+    continua disponivel mesmo apos um unlock.
+    """
+    if not username and not ip:
+        return 0
+    corte = datetime.now().isoformat(timespec="seconds")
+    # Usamos datetime do Python e comparamos como string ISO (alinhado
+    # com o padrao de timestamps do projeto).
+    from datetime import timedelta as _td
+    desde = (
+        datetime.now() - _td(hours=max(1, int(janela_horas)))
+    ).isoformat(timespec="seconds")
+
+    filtros = ["resultado != 'sucesso'", "ts > ?"]
+    params: list[Any] = [desde]
+    if username:
+        filtros.append("LOWER(username) = LOWER(?)")
+        params.append(username)
+    if ip:
+        filtros.append("ip = ?")
+        params.append(ip)
+    sql = f"DELETE FROM login_attempts WHERE {' AND '.join(filtros)}"
+    with get_conn() as conn:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.rowcount
+
+
+def purgar_tentativas_login_antigas(*, ate_iso: str) -> int:
+    """Deleta tentativas com ts <= ate_iso. Chamado pelo job de retention
+    (90d padrao). Retorna quantas linhas removeu."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM login_attempts WHERE ts <= ?",
+            (ate_iso,),
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 # ---------- R2 cross-time: histórico de produtos ----------

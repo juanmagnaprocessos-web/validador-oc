@@ -161,6 +161,24 @@ class Settings(BaseSettings):
     # aceita ausencia de token como autorizada.
     cron_trigger_token: str = Field("", alias="CRON_TRIGGER_TOKEN")
 
+    # --- Rate limit de autenticacao ---
+    # Middleware custom persistido em SQL (tabela `login_attempts`).
+    # Dois limites independentes por janela. O mais restritivo dispara
+    # primeiro e ambos retornam 429 com Retry-After=LOGIN_JANELA_S.
+    # login_rate_enabled: master switch (testes podem desligar).
+    login_rate_enabled: bool = Field(True, alias="LOGIN_RATE_ENABLED")
+    # Limite por (IP + username) — defende contra brute-force focado.
+    login_rate_ip_user_max: int = Field(5, alias="LOGIN_RATE_IP_USER_MAX")
+    # Limite por IP — defende contra username-spray (admin, root, etc.).
+    login_rate_ip_max: int = Field(20, alias="LOGIN_RATE_IP_MAX")
+    # Janela deslizante em segundos para ambos os contadores.
+    login_rate_janela_s: int = Field(60, alias="LOGIN_RATE_JANELA_S")
+    # Retencao do log de tentativas em dias. Job de purge chamado por
+    # CLI/cron (implementacao inicial: limpeza sob demanda).
+    login_attempts_retention_days: int = Field(
+        90, alias="LOGIN_ATTEMPTS_RETENTION_DAYS"
+    )
+
     # --- CORS ---
     cors_origins: str = Field(
         "http://localhost:5173", alias="CORS_ORIGINS"
