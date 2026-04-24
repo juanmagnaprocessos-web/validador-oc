@@ -394,6 +394,33 @@ class ColetaOC:
     card_pipefy: CardPipefy | None
 
 
+def _placas_com_card_sintetico(
+    coletas: list["ColetaOC"],
+    ocs_index: dict[str, Any],
+) -> set[str]:
+    """Placas cuja ColetaOC foi gerada por card SINTETICO.
+
+    Card sintetico = coleta cujo `oc.id_pedido` NAO esta em `ocs_index`,
+    sinal de que matching direto (codigo_oc) e fallback por placa falharam
+    e `_oc_minima_para_card_orfao` foi usado para preencher a coleta.
+
+    Usado para dedupe defensivo na geracao de orfas: placas com card
+    sintetico ja aparecem no dashboard (sem cotacao do Club) — nao devem
+    reaparecer como orfas (com cotacao) na Revisao Final. Esse era o
+    bug da placa QQF2C69 em 2026-04-10.
+
+    IMPORTANTE: esta funcao NAO inclui placas de coletas com card REAL
+    (id_pedido valido do Club). Mesma placa pode ter varias cotacoes
+    legitimas no mesmo dia, e o resto do pipeline ja evita duplicatas
+    reais via `ids_pedido_consumidos`.
+    """
+    return {
+        c.oc.placa_normalizada for c in coletas
+        if c.oc.placa_normalizada
+        and str(c.oc.id_pedido) not in ocs_index
+    }
+
+
 def _oc_minima_para_card_orfao(card: CardPipefy) -> OrdemCompra:
     """Sintetiza uma OrdemCompra mínima para um card que NÃO foi
     encontrado no Club (codigo_oc inválido ou OC não existe). Permite
@@ -1399,23 +1426,35 @@ async def _executar_validacao_impl(
         # Buscamos `produtos_cotacao` por id_cotacao em paralelo para cada
         # órfã com semáforo, para não saturar o Club.
         #
-        # Dedupe defensivo por placa: se uma placa ja tem card em `coletas`
-        # (inclusive card orfao com codigo_oc vazio, via _oc_minima_para_card_orfao),
-        # NAO pode aparecer tambem na lista de orfas. Sem isso, a mesma placa
-        # pode aparecer 2x no relatorio (dashboard com card sem cotacao +
-        # Revisao Final com cotacao) — bug observado com a placa QQF2C69.
-        placas_com_card: set[str] = {
-            c.oc.placa_normalizada for c in coletas if c.oc.placa_normalizada
-        }
+        # Dedupe defensivo SO quando ha card SINTETICO para a placa.
+        #
+        # Card sintetico = coleta cujo id_pedido NAO existe em ocs_index,
+        # gerada por `_oc_minima_para_card_orfao` quando o matching direto
+        # (codigo_oc) e o fallback por placa falharam. Nesse cenario, a
+        # MESMA OC do Club tende a aparecer 2x no relatorio (dashboard
+        # com card sem cotacao + Revisao Final com cotacao) — bug observado
+        # com a placa QQF2C69 em 2026-04-10.
+        #
+        # IMPORTANTE: NAO deduplicar por placa quando o card e real (id_pedido
+        # do Club). Uma mesma placa pode legitimamente ter VARIAS cotacoes
+        # distintas no mesmo dia (ex: HOE-6G23 em 2026-04-23 tinha 2 cotacoes
+        # diferentes, e descartar a orfa silenciosamente fazia a OC sumir
+        # do relatorio).
+        placas_com_card_sintetico = _placas_com_card_sintetico(
+            coletas, ocs_index,
+        )
         orfas_raw: list[tuple[OrdemCompra, str | None]] = []
         for id_pedido, raw in ocs_index.items():
             if id_pedido in ids_pedido_consumidos:
                 continue
             oc = _parse_oc(raw)
-            if oc.placa_normalizada and oc.placa_normalizada in placas_com_card:
+            if (
+                oc.placa_normalizada
+                and oc.placa_normalizada in placas_com_card_sintetico
+            ):
                 logger.info(
-                    "Dedupe: OC %s (placa %s) ja tem card em resultados, "
-                    "nao adiciona a Revisao Final",
+                    "Dedupe: OC %s (placa %s) ja tem card sintetico "
+                    "em resultados, nao adiciona a Revisao Final",
                     oc.id_pedido, oc.placa_normalizada,
                 )
                 continue
