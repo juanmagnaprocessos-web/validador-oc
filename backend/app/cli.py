@@ -4,6 +4,9 @@ Uso:
     python -m app.cli validar --data 2026-04-05 --dry-run
     python -m app.cli validar --data 2026-04-05 --apply
     python -m app.cli historico
+    python -m app.cli unlock --username juanpablo      (destrava login)
+    python -m app.cli unlock --ip 192.0.2.1             (destrava IP)
+    python -m app.cli purgar-tentativas                 (aplica retention)
 """
 from __future__ import annotations
 
@@ -260,6 +263,47 @@ def cmd_criar_admin(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_unlock(args: argparse.Namespace) -> int:
+    """Destrava rate limit de login apagando tentativas falhadas recentes.
+
+    Uso de emergencia quando um admin erra a senha N vezes e fica bloqueado.
+    Exige pelo menos um entre --username e --ip (anti-pegadinha)."""
+    from app.services.login_attempts import unlock
+
+    if not args.username and not args.ip:
+        console.print(
+            "[red]Erro:[/red] informe --username e/ou --ip "
+            "(evita apagar tudo por engano)."
+        )
+        return 2
+
+    removidos = unlock(username=args.username, ip=args.ip)
+    filtros = []
+    if args.username:
+        filtros.append(f"username={args.username}")
+    if args.ip:
+        filtros.append(f"ip={args.ip}")
+    alvo = " · ".join(filtros)
+    console.print(
+        f"[green]OK[/green] {removidos} tentativa(s) falhada(s) removida(s) "
+        f"({alvo}). Login liberado na proxima tentativa."
+    )
+    return 0
+
+
+def cmd_purgar_tentativas(args: argparse.Namespace) -> int:
+    """Aplica retention policy em login_attempts."""
+    from app.services.login_attempts import purgar_logs_antigos
+
+    res = purgar_logs_antigos()
+    console.print(
+        f"[green]OK[/green] removido(s) {res['removidos']} registro(s) "
+        f"anteriores a {res['corte_iso']} "
+        f"(retention={res['retention_days']}d)."
+    )
+    return 0
+
+
 def cmd_historico(args: argparse.Namespace) -> int:
     hist = listar_historico(args.limite)
     tbl = Table(title="Histórico de validações")
@@ -337,6 +381,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     comp_init.add_argument("--dias", type=int, default=30)
 
+    # unlock
+    un = sub.add_parser(
+        "unlock",
+        help="Remove tentativas de login falhadas (destrava rate limit)",
+    )
+    un.add_argument("--username", default=None, help="Username a destravar")
+    un.add_argument("--ip", default=None, help="IP a destravar")
+
+    # purgar-tentativas
+    sub.add_parser(
+        "purgar-tentativas",
+        help="Aplica retention policy em login_attempts (default 90d)",
+    )
+
     return p
 
 
@@ -352,6 +410,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_compradores(args)
     if args.cmd == "criar-admin":
         return cmd_criar_admin(args)
+    if args.cmd == "unlock":
+        return cmd_unlock(args)
+    if args.cmd == "purgar-tentativas":
+        return cmd_purgar_tentativas(args)
 
     return 1
 

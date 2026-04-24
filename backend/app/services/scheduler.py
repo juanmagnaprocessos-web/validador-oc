@@ -57,10 +57,34 @@ def start_scheduler() -> None:
         id="daily-validation",
         replace_existing=True,
     )
+
+    # Job diario de purge do log de tentativas (retention = LOGIN_ATTEMPTS_
+    # RETENTION_DAYS). Roda as 03h BRT pra nao competir com a validacao
+    # principal. Idempotente: se nao ha nada a apagar, retorna 0.
+    def _purge_login_attempts_job() -> None:
+        try:
+            from app.services.login_attempts import purgar_logs_antigos
+            res = purgar_logs_antigos()
+            logger.info(
+                "login_attempts purge: removidos=%d corte=%s retention=%dd",
+                res["removidos"], res["corte_iso"], res["retention_days"],
+            )
+        except Exception:
+            logger.exception("Falha ao rodar purge de login_attempts")
+
+    _scheduler.add_job(
+        _purge_login_attempts_job,
+        CronTrigger(hour=3, minute=0, timezone=tz),
+        id="login-attempts-purge",
+        replace_existing=True,
+    )
+
     _scheduler.start()
     logger.info(
-        "CRON iniciado — job 'daily-validation' agendado para %02d:%02d %s",
+        "CRON iniciado — job 'daily-validation' em %02d:%02d %s; "
+        "'login-attempts-purge' em 03:00 %s",
         settings.cron_hour_brt, settings.cron_minute, settings.cron_timezone,
+        settings.cron_timezone,
     )
 
 

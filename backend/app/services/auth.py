@@ -8,13 +8,18 @@ Decisões tomadas com o usuário (registradas no plano):
   - Senha mínima: 8 chars
   - 1º login força troca de senha (`must_change_password=True`)
   - Sem JWT, sem lockout, sem auditoria de ações (Fase futura)
+
+Sessão 15 (23/04/2026): adicionado rate limit + log de tentativas.
+`get_current_user` agora chama `checar_rate_limit` antes de validar
+credenciais e registra cada tentativa (sucesso ou falha) em
+`login_attempts`. Ver `services/login_attempts.py`.
 """
 from __future__ import annotations
 
 import secrets
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.db import (
@@ -78,6 +83,7 @@ def _carregar_usuario_com_perfil(row: dict) -> Usuario:
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPBasicCredentials | None = Depends(_security),
 ) -> Usuario:
     """Dependency: valida Basic Auth e retorna o usuário autenticado.
@@ -85,26 +91,59 @@ def get_current_user(
     Usa auto_error=False para evitar que o navegador mostre o popup
     nativo de HTTP Basic Auth (WWW-Authenticate: Basic). O frontend
     gerencia o login via formulário proprio.
+
+    Ordem:
+      1. Rate limit (pode levantar 429)
+      2. Validacao de credencial + registro da tentativa
+      3. Dummy checkpw pra tempo constante quando usuario nao existe
+         ou esta inativo — defende contra timing attack de enumeracao.
     """
+    # Import lazy pra evitar ciclo: login_attempts importa `_to_bytes` daqui.
+    from app.services import login_attempts as la
+
+    username_tentado = credentials.username if credentials is not None else ""
+    la.checar_rate_limit(request, username_tentado)
+
     if credentials is None:
+        la.registrar_tentativa(request, "", "credenciais_ausentes")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais não fornecidas",
         )
 
     row = get_usuario_por_username(credentials.username)
-    if not row or not row.get("ativo"):
+
+    if not row:
+        # Timing-safe: consome ~200ms mesmo sem usuario
+        la.consumir_bcrypt_dummy(credentials.password)
+        la.registrar_tentativa(
+            request, credentials.username, "usuario_inexistente",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas",
+        )
+
+    if not row.get("ativo"):
+        la.consumir_bcrypt_dummy(credentials.password)
+        la.registrar_tentativa(
+            request, credentials.username, "usuario_desativado",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas",
         )
 
     if not verificar_senha(credentials.password, row["senha_hash"]):
+        la.registrar_tentativa(
+            request, credentials.username, "senha_errada",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciais inválidas",
         )
 
+    la.registrar_tentativa(request, credentials.username, "sucesso")
     registrar_login(row["id"])
     return _carregar_usuario_com_perfil(row)
 

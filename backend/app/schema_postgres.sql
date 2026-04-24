@@ -200,3 +200,25 @@ CREATE TABLE IF NOT EXISTS cron_locks (
     last_error    TEXT,
     updated_at    TEXT    NOT NULL
 );
+
+-- Log de tentativas de autenticacao (sucesso e falha). Serve a dois
+-- propositos: (1) auditoria forense, (2) storage persistente do rate
+-- limiter — contador vem de COUNT(*) WHERE ip=? AND ts > ? AND
+-- resultado != 'sucesso'. Persistencia em SQL garante que reinicio
+-- do app nao zere o contador.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id          BIGSERIAL PRIMARY KEY,
+    ts          TEXT    NOT NULL,
+    ip          TEXT    NOT NULL,
+    username    TEXT    NOT NULL,
+    user_agent  TEXT,
+    resultado   TEXT    NOT NULL,
+    rota        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ts
+    ON login_attempts(ts);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_ts
+    ON login_attempts(ip, ts);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_user_ts
+    ON login_attempts(ip, username, ts);
