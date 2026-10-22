@@ -103,7 +103,8 @@ def test_cron_pendente_com_lock_rodando_expirado_retorna_dict(tmp_db, monkeypatc
     app_db.adquirir_cron_lock("2026-04-16", "host:1", ttl_seconds=1)
     # Forca expires_at para o passado
     with app_db.get_conn() as conn:
-        passado = (datetime.now() - timedelta(hours=5)).isoformat(timespec="seconds")
+        # 5h antes do "agora" fixado por _patch_now (nao usar o relogio real)
+        passado = (datetime(2026, 4, 17, 8, 0) - timedelta(hours=5)).isoformat(timespec="seconds")
         conn.execute(
             "UPDATE cron_locks SET expires_at = ? WHERE data_d1 = ?",
             (passado, "2026-04-16"),
