@@ -109,7 +109,7 @@ export function Relatorios() {
         </button>
         <button
           onClick={baixar}
-          disabled={baixando || periodoInvalido || !dados}
+          disabled={baixando || periodoInvalido}
           style={btnSecondary}
         >
           {baixando ? "Baixando..." : "Baixar Excel"}

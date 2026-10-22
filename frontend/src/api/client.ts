@@ -315,13 +315,18 @@ export async function baixarExcelDuplicadas(
   const resp = await apiFetch(
     `${BASE}/relatorios/duplicadas/excel${paramsPeriodo(dataInicio, dataFim)}`,
   );
-  if (!resp.ok) throw new Error(`${resp.status}: falha ao gerar Excel`);
+  if (!resp.ok) {
+    const detalhe = (await resp.text()).slice(0, 200);
+    throw new Error(`${resp.status}: falha ao gerar Excel. ${detalhe}`);
+  }
   const url = URL.createObjectURL(await resp.blob());
   const a = document.createElement("a");
   a.href = url;
   a.download = `duplicadas_${dataInicio || "inicio"}_${dataFim || "hoje"}.xlsx`;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export async function getCronStatus(): Promise<CronStatus> {
