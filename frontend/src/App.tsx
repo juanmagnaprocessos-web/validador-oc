@@ -3,11 +3,10 @@ import { useAuth } from "./contexts/AuthContext";
 import { AdminUsers } from "./components/AdminUsers";
 import { Dashboard } from "./components/Dashboard";
 import { Login } from "./components/Login";
-import { Shell } from "./components/Shell";
+import { Relatorios } from "./components/Relatorios";
+import { Shell, type Tela } from "./components/Shell";
 import { TrocarSenha } from "./components/TrocarSenha";
 import { Spinner } from "./components/Spinner";
-
-type Tela = "dashboard" | "admin";
 
 export default function App() {
   const { user, loading, setUser } = useAuth();
@@ -58,7 +57,13 @@ export default function App() {
         onTela={setTela}
         onTrocarSenha={() => setTrocandoSenha(true)}
       >
-        {tela === "dashboard" ? <Dashboard /> : <AdminUsers />}
+        {tela === "dashboard" ? (
+          <Dashboard />
+        ) : tela === "relatorios" ? (
+          <Relatorios />
+        ) : (
+          <AdminUsers />
+        )}
       </Shell>
     </>
   );

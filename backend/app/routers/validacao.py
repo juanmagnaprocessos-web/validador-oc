@@ -9,11 +9,12 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import settings
 from app.db import (
     dry_runs_cron_pendentes,
+    listar_duplicadas_periodo,
     listar_historico,
     resultados_de,
     cron_pendente_de_execucao,
@@ -23,7 +24,7 @@ from app.db import (
 from app.models import StatusValidacao, Usuario
 from app.services.auth import get_current_user, require_admin
 from app.services.orchestrator import executar_validacao
-from app.services.report import gerar_excel, gerar_html
+from app.services.report import gerar_excel, gerar_excel_duplicadas, gerar_html
 from app.services.validation_lock import get_lock as _get_validacao_lock
 
 _DATA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -133,6 +134,53 @@ async def historico(
         raise HTTPException(422, "data_inicio não pode ser maior que data_fim")
     return JSONResponse(
         listar_historico(limite=limite, data_inicio=data_inicio, data_fim=data_fim)
+    )
+
+
+def _validar_periodo(data_inicio: str | None, data_fim: str | None) -> None:
+    if data_inicio is not None and not _DATA_ISO_RE.match(data_inicio):
+        raise HTTPException(422, "data_inicio inválida — use YYYY-MM-DD")
+    if data_fim is not None and not _DATA_ISO_RE.match(data_fim):
+        raise HTTPException(422, "data_fim inválida — use YYYY-MM-DD")
+    if data_inicio and data_fim and data_inicio > data_fim:
+        raise HTTPException(422, "data_inicio não pode ser maior que data_fim")
+
+
+@router.get("/relatorios/duplicadas")
+async def relatorio_duplicadas(
+    data_inicio: str | None = Query(None, description="D-1 mínimo YYYY-MM-DD"),
+    data_fim: str | None = Query(None, description="D-1 máximo YYYY-MM-DD"),
+    _: Usuario = Depends(get_current_user),
+):
+    """Peças duplicadas (R2) já detectadas nas validações do período."""
+    _validar_periodo(data_inicio, data_fim)
+    linhas = listar_duplicadas_periodo(data_inicio, data_fim)
+    return JSONResponse(
+        {
+            "data_inicio": data_inicio,
+            "data_fim": data_fim,
+            "total_pecas": len(linhas),
+            "total_ocs": len({l["id_pedido"] for l in linhas}),
+            "linhas": linhas,
+        }
+    )
+
+
+@router.get("/relatorios/duplicadas/excel")
+async def relatorio_duplicadas_excel(
+    data_inicio: str | None = Query(None),
+    data_fim: str | None = Query(None),
+    _: Usuario = Depends(get_current_user),
+):
+    _validar_periodo(data_inicio, data_fim)
+    conteudo = gerar_excel_duplicadas(
+        listar_duplicadas_periodo(data_inicio, data_fim), data_inicio, data_fim
+    )
+    nome = f"duplicadas_{data_inicio or 'inicio'}_{data_fim or 'hoje'}.xlsx"
+    return Response(
+        content=conteudo,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'},
     )
 
 

@@ -3,9 +3,11 @@ import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { COLORS, RADIUS, btnNav, btnSecondary, FONT } from "../styles/theme";
 
+export type Tela = "dashboard" | "relatorios" | "admin";
+
 interface ShellProps {
-  tela: "dashboard" | "admin";
-  onTela: (t: "dashboard" | "admin") => void;
+  tela: Tela;
+  onTela: (t: Tela) => void;
   onTrocarSenha: () => void;
   children: ReactNode;
 }
@@ -108,6 +110,13 @@ export function Shell({ tela, onTela, onTrocarSenha, children }: ShellProps) {
               aria-current={tela === "dashboard" ? "page" : undefined}
             >
               Dashboard
+            </button>
+            <button
+              onClick={() => onTela("relatorios")}
+              style={btnNav(tela === "relatorios")}
+              aria-current={tela === "relatorios" ? "page" : undefined}
+            >
+              Relatórios
             </button>
             {isAdmin && (
               <button

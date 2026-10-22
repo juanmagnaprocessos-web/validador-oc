@@ -20,6 +20,56 @@ _jinja = Environment(
 )
 
 
+def gerar_excel_duplicadas(
+    linhas: list[dict],
+    data_inicio: str | None,
+    data_fim: str | None,
+) -> bytes:
+    """Excel do relatorio de duplicadas (R2): 1 linha por peca duplicada."""
+    from io import BytesIO
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Duplicadas"
+    colunas = [
+        ("Data D-1", "data_d1", 12), ("OC", "id_pedido", 14), ("Placa", "placa", 11),
+        ("Peça", "peca", 40), ("Tipo", "tipo", 26), ("Devolução", "devolucao", 24),
+        ("Fornecedor", "fornecedor", 28), ("OC anterior", "oc_anterior", 14),
+        ("Data anterior", "data_anterior", 13),
+        ("Fornecedor anterior", "fornecedor_anterior", 28),
+        ("Mesmo fornecedor", "mesmo_fornecedor", 16), ("Comprador", "comprador", 22),
+        ("Status OC", "status", 16), ("Card Pipefy", "card_pipefy_id", 16),
+        ("Link OC anterior", "link_oc_anterior", 30),
+        ("Link devolução", "link_devolucao", 30),
+    ]
+    ws.append([c[0] for c in colunas])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F3A5F")
+        c.alignment = Alignment(horizontal="center")
+    for l in linhas:
+        ws.append([
+            ("Sim" if l[k] else "Não") if k == "mesmo_fornecedor" and l.get(k) is not None
+            else l.get(k)
+            for _, k, _ in colunas
+        ])
+    for i, (_, _, largura) in enumerate(colunas, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = largura
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    resumo = wb.create_sheet("Resumo")
+    resumo.append(["Período (D-1)", f"{data_inicio or 'início'} a {data_fim or 'hoje'}"])
+    resumo.append(["Peças duplicadas", len(linhas)])
+    resumo.append(["OCs envolvidas", len({l["id_pedido"] for l in linhas})])
+    resumo.column_dimensions["A"].width = 22
+    resumo.column_dimensions["B"].width = 28
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _acao_sugerida(r: ResultadoValidacao) -> str:
     """Texto curto do que o sistema FARIA em modo automático."""
     s = r.status

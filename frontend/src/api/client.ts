@@ -261,6 +261,69 @@ export async function getHistorico(
   return asJson(await apiFetch(`${BASE}/historico?${params.toString()}`, init));
 }
 
+// ----- Relatórios -----
+
+export interface DuplicadaLinha {
+  data_d1: string;
+  id_pedido: string;
+  placa: string | null;
+  peca: string | null;
+  tipo: string;
+  devolucao: string | null;
+  fornecedor: string | null;
+  comprador: string | null;
+  status: string;
+  severidade: string | null;
+  card_pipefy_id: string | null;
+  oc_anterior: string | null;
+  data_anterior: string | null;
+  fornecedor_anterior: string | null;
+  mesmo_fornecedor: boolean | null;
+  link_oc_anterior: string | null;
+  link_devolucao: string | null;
+}
+
+export interface RelatorioDuplicadas {
+  data_inicio: string | null;
+  data_fim: string | null;
+  total_pecas: number;
+  total_ocs: number;
+  linhas: DuplicadaLinha[];
+}
+
+function paramsPeriodo(dataInicio?: string, dataFim?: string): string {
+  const params = new URLSearchParams();
+  if (dataInicio) params.set("data_inicio", dataInicio);
+  if (dataFim) params.set("data_fim", dataFim);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export async function getRelatorioDuplicadas(
+  dataInicio?: string,
+  dataFim?: string,
+): Promise<RelatorioDuplicadas> {
+  return asJson(
+    await apiFetch(`${BASE}/relatorios/duplicadas${paramsPeriodo(dataInicio, dataFim)}`),
+  );
+}
+
+export async function baixarExcelDuplicadas(
+  dataInicio?: string,
+  dataFim?: string,
+): Promise<void> {
+  const resp = await apiFetch(
+    `${BASE}/relatorios/duplicadas/excel${paramsPeriodo(dataInicio, dataFim)}`,
+  );
+  if (!resp.ok) throw new Error(`${resp.status}: falha ao gerar Excel`);
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `duplicadas_${dataInicio || "inicio"}_${dataFim || "hoje"}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function getCronStatus(): Promise<CronStatus> {
   return asJson(await apiFetch(`${BASE}/cron/status`));
 }

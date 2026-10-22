@@ -1074,6 +1074,89 @@ def buscar_todas_duplicidades_placa(
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def listar_duplicadas_periodo(
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+) -> list[dict[str, Any]]:
+    """Duplicidades (R2) ja detectadas pelo sistema nas validacoes cujo
+    D-1 esta no periodo (inclusive). Le `oc_resultados.divergencias_json`
+    e devolve 1 linha por peca duplicada.
+
+    Se um mesmo D-1 foi validado mais de uma vez (dry-run + real, reexecucao),
+    considera so a validacao mais recente daquele dia, para nao contar em dobro.
+    """
+    where_parts: list[str] = []
+    params: list[Any] = []
+    if data_inicio:
+        where_parts.append("data_d1 >= ?")
+        params.append(data_inicio)
+    if data_fim:
+        where_parts.append("data_d1 <= ?")
+        params.append(data_fim)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT v.data_d1, r.id_pedido, r.placa, r.fornecedor, r.comprador,
+                       r.status, r.card_pipefy_id, r.divergencias_json
+                FROM oc_resultados r
+                JOIN validacoes v ON v.id = r.validacao_id
+                WHERE v.id IN (
+                    SELECT MAX(id) FROM validacoes {where_sql} GROUP BY data_d1
+                )
+                  AND r.divergencias_json IS NOT NULL
+                ORDER BY v.data_d1, r.id_pedido""",
+            tuple(params),
+        ).fetchall()
+
+    linhas: list[dict[str, Any]] = []
+    for row in rows:
+        r = dict(row)
+        try:
+            divs = json.loads(r["divergencias_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for d in divs if isinstance(divs, list) else []:
+            titulo = d.get("titulo") or ""
+            if d.get("regra") != "R2" or not titulo.startswith("Peça duplicada"):
+                continue
+            dados = d.get("dados") or {}
+            cross = "cross-time" in titulo.lower()
+            if dados.get("tem_devolucao_peca"):
+                devolucao = "Com devolução da peça"
+            elif dados.get("tem_devolucao_outra_peca"):
+                devolucao = "Devolução de outra peça"
+            elif cross:
+                devolucao = "Sem devolução"
+            else:
+                devolucao = None
+            base = {
+                "data_d1": r["data_d1"],
+                "id_pedido": r["id_pedido"],
+                "placa": r["placa"],
+                "fornecedor": r["fornecedor"],
+                "comprador": r["comprador"],
+                "status": r["status"],
+                "card_pipefy_id": r["card_pipefy_id"],
+                "severidade": d.get("severidade"),
+                "tipo": "Reincidência (OC anterior)" if cross else "Repetida na cotação",
+                "devolucao": devolucao,
+                "oc_anterior": dados.get("oc_anterior"),
+                "data_anterior": dados.get("data_anterior"),
+                "fornecedor_anterior": dados.get("fornecedor_anterior_nome"),
+                "mesmo_fornecedor": dados.get("mesmo_fornecedor"),
+                "link_oc_anterior": dados.get("link_oc_anterior"),
+                "link_devolucao": dados.get("link_devolucao"),
+                "situacao": titulo.split(":", 1)[1].strip() if cross and ":" in titulo else None,
+            }
+            if cross:
+                linhas.append({**base, "peca": dados.get("descricao_peca") or dados.get("chave_produto")})
+            else:
+                for chave in dados.get("duplicados") or [None]:
+                    linhas.append({**base, "peca": chave})
+    return linhas
+
+
 def dias_presentes_no_historico(
     data_inicio: str, data_fim: str
 ) -> set[str]:
